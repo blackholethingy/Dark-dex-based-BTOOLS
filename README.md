@@ -1,2 +1,2 @@
 # Dark-dex-based-BTOOLS
-basically uhh its btools but client-sided and uses dark-dex ig
+!!IMPORTANT!! I have only tested these with Dark Dex's built in executor!!
