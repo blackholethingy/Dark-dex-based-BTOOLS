@@ -1,4 +1,3 @@
-```lua
 -- ==========================================================
 -- ADVANCED STUDIO DRAGGER ENGINE - COMBINED
 -- ==========================================================
@@ -103,20 +102,15 @@ _G.DexUpdateButtonHighlights = function(activeModeName)
 			and b.Text ~= "[X] Close"
 			and b.Text ~= "[-] Delete"
 		then
-
 			if b.Text == activeModeName then
 				if activeModeName == "Select" then
 					b.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
-
 				elseif activeModeName == "Create" then
 					b.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
-
 				elseif activeModeName == "Move" then
 					b.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-
 				elseif activeModeName == "Scale" then
 					b.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-
 				elseif activeModeName == "Rotate" then
 					b.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
 				end
@@ -166,10 +160,12 @@ local function createShapeButton(name, color)
 	local btn = Instance.new("TextButton")
 
 	btn.Size = UDim2.new(0, 58, 0, 25)
-	btn.BackgroundColor3 =
-		name == "Block"
-		and color
-		or Color3.fromRGB(40, 40, 40)
+
+	if name == "Block" then
+		btn.BackgroundColor3 = color
+	else
+		btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	end
 
 	btn.Text = name
 	btn.TextColor3 = Color3.fromRGB(200, 200, 200)
@@ -243,7 +239,6 @@ local currentMoveIdx = 1
 local currentRotIdx = 1
 
 local btnMoveSnap = Instance.new("TextButton")
-
 btnMoveSnap.Size = UDim2.new(0, 140, 0, 25)
 btnMoveSnap.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 btnMoveSnap.Text = "Move Snap: Smooth"
@@ -264,17 +259,14 @@ btnMoveSnap.MouseButton1Click:Connect(function()
 
 	_G.DexMoveSnap = val
 
-	btnMoveSnap.Text =
-		"Move Snap: "
-		.. (
-			val == 0
-			and "Smooth"
-			or tostring(val) .. " Studs"
-		)
+	if val == 0 then
+		btnMoveSnap.Text = "Move Snap: Smooth"
+	else
+		btnMoveSnap.Text = "Move Snap: " .. tostring(val) .. " Studs"
+	end
 end)
 
 local btnRotSnap = Instance.new("TextButton")
-
 btnRotSnap.Size = UDim2.new(0, 140, 0, 25)
 btnRotSnap.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 btnRotSnap.Text = "Rotate Snap: Smooth"
@@ -295,13 +287,11 @@ btnRotSnap.MouseButton1Click:Connect(function()
 
 	_G.DexRotateSnap = val
 
-	btnRotSnap.Text =
-		"Rotate Snap: "
-		.. (
-			val == 0
-			and "Smooth"
-			or tostring(val) .. "°"
-		)
+	if val == 0 then
+		btnRotSnap.Text = "Rotate Snap: Smooth"
+	else
+		btnRotSnap.Text = "Rotate Snap: " .. tostring(val) .. "°"
+	end
 end)
 
 -- ==========================================================
@@ -410,11 +400,10 @@ moveHandles.MouseDrag:Connect(function(face, distance)
 
 	local direction = Vector3.FromNormalId(face)
 
-	local snappedDistance =
-		snapValue(
-			distance,
-			_G.DexMoveSnap
-		)
+	local snappedDistance = snapValue(
+		distance,
+		_G.DexMoveSnap
+	)
 
 	_G.DexActivePart.CFrame =
 		startCFrame
@@ -445,11 +434,10 @@ scaleHandles.MouseDrag:Connect(function(face, distance)
 
 	local direction = Vector3.FromNormalId(face)
 
-	local snappedDistance =
-		snapValue(
-			distance,
-			_G.DexMoveSnap
-		)
+	local snappedDistance = snapValue(
+		distance,
+		_G.DexMoveSnap
+	)
 
 	local newSize =
 		startSize
@@ -483,17 +471,15 @@ rotateHandles.MouseDrag:Connect(function(axis, relativeAngle)
 		return
 	end
 
-	local axisVector =
-		Vector3.FromAxis(axis)
+	local axisVector = Vector3.FromAxis(axis)
 
 	local degrees =
 		math.degrees(relativeAngle)
 
-	local snappedDegrees =
-		snapValue(
-			degrees,
-			_G.DexRotateSnap
-		)
+	local snappedDegrees = snapValue(
+		degrees,
+		_G.DexRotateSnap
+	)
 
 	local snappedAngle =
 		math.rad(snappedDegrees)
@@ -533,7 +519,6 @@ end
 -- ==========================================================
 
 local btnDelete = Instance.new("TextButton")
-
 btnDelete.Size = UDim2.new(0, 60, 0, 35)
 btnDelete.BackgroundColor3 = Color3.fromRGB(180, 70, 70)
 btnDelete.Text = "[-] Delete"
@@ -552,7 +537,6 @@ end)
 -- ==========================================================
 
 local btnClose = Instance.new("TextButton")
-
 btnClose.Size = UDim2.new(0, 60, 0, 35)
 btnClose.BackgroundColor3 = Color3.fromRGB(100, 40, 40)
 btnClose.Text = "[X] Close"
@@ -579,49 +563,28 @@ local function createPart()
 
 	if _G.DexCurrentShape == "Block" then
 		spawnPart = Instance.new("Part")
-
-		spawnPart.Shape =
-			Enum.PartType.Block
+		spawnPart.Shape = Enum.PartType.Block
 
 	elseif _G.DexCurrentShape == "Wedge" then
-		spawnPart =
-			Instance.new("WedgePart")
+		spawnPart = Instance.new("WedgePart")
 
 	elseif _G.DexCurrentShape == "Sphere" then
-		spawnPart =
-			Instance.new("Part")
-
-		spawnPart.Shape =
-			Enum.PartType.Ball
+		spawnPart = Instance.new("Part")
+		spawnPart.Shape = Enum.PartType.Ball
 
 	elseif _G.DexCurrentShape == "Cylinder" then
-		spawnPart =
-			Instance.new("Part")
-
-		spawnPart.Shape =
-			Enum.PartType.Cylinder
+		spawnPart = Instance.new("Part")
+		spawnPart.Shape = Enum.PartType.Cylinder
 	end
 
 	if not spawnPart then
 		return
 	end
 
-	spawnPart.Size =
-		Vector3.new(4, 4, 4)
-
-	spawnPart.Name =
-		"DexStudioSpawnedPart"
-
-	spawnPart.Material =
-		Enum.Material.SmoothPlastic
-
-	spawnPart.Color =
-		Color3.fromRGB(
-			163,
-			162,
-			165
-		)
-
+	spawnPart.Size = Vector3.new(4, 4, 4)
+	spawnPart.Name = "DexStudioSpawnedPart"
+	spawnPart.Material = Enum.Material.SmoothPlastic
+	spawnPart.Color = Color3.fromRGB(163, 162, 165)
 	spawnPart.Anchored = true
 
 	local hitPosition =
@@ -728,7 +691,10 @@ inputConnection =
 				return
 			end
 
+			-- ==================================================
 			-- CREATE MODE
+			-- ==================================================
+
 			if _G.DexCurrentMode == "Create" then
 				if mouse.Target then
 					createPart()
@@ -737,7 +703,10 @@ inputConnection =
 				return
 			end
 
-			-- SELECTION / TOOL MODES
+			-- ==================================================
+			-- SELECT / MOVE / SCALE / ROTATE
+			-- ==================================================
+
 			if _G.DexCurrentMode == "Select"
 				or _G.DexCurrentMode == "Move"
 				or _G.DexCurrentMode == "Scale"
@@ -762,8 +731,7 @@ inputConnection =
 					return
 				end
 
-				local target =
-					mouse.Target
+				local target = mouse.Target
 
 				if target
 					and (
@@ -773,17 +741,13 @@ inputConnection =
 						)
 					)
 				then
-
-					_G.DexActivePart =
-						target
+					_G.DexActivePart = target
 
 					_G.DexUpdateHandles(
 						target
 					)
-
 				else
-					_G.DexActivePart =
-						nil
+					_G.DexActivePart = nil
 
 					_G.DexHideAllHandles()
 				end
@@ -792,4 +756,3 @@ inputConnection =
 	)
 
 print("Advanced Studio Dragger Engine Loaded!")
-```
