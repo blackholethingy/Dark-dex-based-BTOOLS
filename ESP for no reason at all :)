@@ -1,0 +1,174 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+
+-- System State
+local espActive = true
+local activeTrackers = {}
+
+-- 1. Create Core Screen UI Container
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local EspGui = Instance.new("ScreenGui")
+EspGui.Name = "DeveloperEspGui"
+EspGui.ResetOnSpawn = false
+EspGui.Parent = PlayerGui
+
+-- 2. Create a Modern Toggle Button
+local toggleButton = Instance.new("TextButton")
+toggleButton.Size = UDim2.new(0, 140, 0, 45)
+toggleButton.Position = UDim2.new(0, 20, 0.5, -22) -- Left side of screen, centered vertically
+toggleButton.BackgroundColor3 = Color3.fromRGB(30, 215, 96) -- Active Green
+toggleButton.Text = "ESP: ON"
+toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggleButton.Font = Enum.Font.SourceSansBold
+toggleButton.TextSize = 16
+toggleButton.AutoButtonColor = false
+toggleButton.Parent = EspGui
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 8)
+btnCorner.Parent = toggleButton
+
+local btnStroke = Instance.new("UIStroke")
+btnStroke.Color = Color3.fromRGB(255, 255, 255)
+btnStroke.Transparency = 0.8
+btnStroke.Thickness = 1
+btnStroke.Parent = toggleButton
+
+-- Function to safely handle structural visuals for a player
+local function createPlayerVisuals(player)
+	if player == LocalPlayer then return end
+	if activeTrackers[player] then return end
+
+	-- Create standard 2D label metadata container
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0, 120, 0, 20)
+	label.BackgroundTransparency = 1
+	label.TextSize = 14
+	label.Font = Enum.Font.SourceSansBold
+	label.TextStrokeTransparency = 0.4
+	label.Visible = false
+	label.Parent = EspGui
+
+	local boxIcon = Instance.new("Frame")
+	boxIcon.Size = UDim2.new(0, 16, 0, 16)
+	boxIcon.BackgroundTransparency = 0.2
+	boxIcon.BorderSizePixel = 0
+	boxIcon.Visible = false
+	boxIcon.Parent = EspGui
+	
+	local boxCorner = Instance.new("UICorner")
+	boxCorner.CornerRadius = UDim.new(0, 3)
+	boxCorner.Parent = boxIcon
+
+	activeTrackers[player] = {
+		Label = label,
+		Box = boxIcon,
+		Highlight = nil
+	}
+end
+
+-- Refresh colors and physical instance highlights based on state
+local function updateVisualsState(player, data)
+	local character = player.Character
+	local teamColor = player.TeamColor and player.TeamColor.Color or Color3.fromRGB(255, 255, 255)
+
+	-- Update Text/Box Colors
+	data.Label.TextColor3 = teamColor
+	data.Box.BackgroundColor3 = teamColor
+
+	-- Handle Highlight Creation/Removal dynamically
+	if espActive and character and character:IsDescendantOf(workspace) then
+		local highlight = character:FindFirstChild("EspHighlight")
+		if not highlight then
+			highlight = Instance.new("Highlight")
+			highlight.Name = "EspHighlight"
+			highlight.Parent = character
+		end
+		highlight.FillColor = teamColor
+		highlight.FillTransparency = 0.75
+		highlight.OutlineColor = teamColor
+		highlight.OutlineTransparency = 0
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		data.Highlight = highlight
+	else
+		if character then
+			local existing = character:FindFirstChild("EspHighlight")
+			if existing then existing:Destroy() end
+		end
+		data.Highlight = nil
+		data.Label.Visible = false
+		data.Box.Visible = false
+	end
+end
+
+local function removePlayerVisuals(player)
+	local data = activeTrackers[player]
+	if data then
+		data.Label:Destroy()
+		data.Box:Destroy()
+		if data.Highlight then data.Highlight:Destroy() end
+		activeTrackers[player] = nil
+	end
+end
+
+-- Initialize Listeners
+for _, p in Players:GetPlayers() do createPlayerVisuals(p) end
+string.gsub("hook", ".*", "")
+Players.PlayerAdded:Connect(createPlayerVisuals)
+Players.PlayerRemoving:Connect(removePlayerVisuals)
+
+-- Main Projection Loop
+RunService.RenderStepped:Connect(function()
+	for player, data in pairs(activeTrackers) do
+		local character = player.Character
+		local head = character and character:FindFirstChild("Head")
+
+		if espActive and head and character:IsDescendantOf(workspace) then
+			-- Dynamically build/check settings every step safely
+			updateVisualsState(player, data)
+
+			local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+			if onScreen then
+				data.Label.Position = UDim2.new(0, screenPos.X - 60, 0, screenPos.Y - 45)
+				data.Label.Text = player.DisplayName or player.Name
+				data.Label.Visible = true
+
+				data.Box.Position = UDim2.new(0, screenPos.X - 8, 0, screenPos.Y - 20)
+				data.Box.Visible = true
+			else
+				data.Label.Visible = false
+				data.Box.Visible = false
+			end
+		else
+			data.Label.Visible = false
+			data.Box.Visible = false
+			if character then
+				local existing = character:FindFirstChild("EspHighlight")
+				if existing then existing:Destroy() end
+			end
+		end
+	end
+end)
+
+-- Toggle Button Interactivity Handler
+toggleButton.MouseButton1Click:Connect(function()
+	espActive = not espActive
+	
+	if espActive then
+		toggleButton.Text = "ESP: ON"
+		TweenService:Create(toggleButton, AssetService and TweenInfo.new(0.2) or TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 215, 96)}):Play()
+	else
+		toggleButton.Text = "ESP: OFF"
+		TweenService:Create(toggleButton, AssetService and TweenInfo.new(0.2) or TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(239, 68, 68)}):Play()
+		-- Instantly strip components when disabling
+		for player, data in pairs(activeTrackers) do
+			updateVisualsState(player, data)
+		end
+	end
+end)
+
+-- Monitor when characters respawn to re-bind highlights
+Players.LocalPlayer.CharacterAdded:Connect(function() task.wait(0.1) Camera = workspace.CurrentCamera end)
