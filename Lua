@@ -1,0 +1,795 @@
+```lua
+-- ==========================================================
+-- ADVANCED STUDIO DRAGGER ENGINE - COMBINED
+-- ==========================================================
+
+if _G.DexDraggerEngine then
+	_G.DexDraggerEngine:Destroy()
+end
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- ==========================================================
+-- GLOBAL STATE
+-- ==========================================================
+
+_G.DexActivePart = nil
+_G.DexCurrentMode = "Select"
+_G.DexCurrentShape = "Block"
+_G.DexMoveSnap = 0
+_G.DexRotateSnap = 0
+
+-- ==========================================================
+-- SCREEN GUI
+-- ==========================================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DexStudioDraggerSuite"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+_G.DexDraggerEngine = screenGui
+
+-- ==========================================================
+-- TOOLBAR
+-- ==========================================================
+
+local toolbar = Instance.new("Frame")
+toolbar.Size = UDim2.new(0, 440, 0, 45)
+toolbar.Position = UDim2.new(0.5, -220, 0, 80)
+toolbar.BackgroundColor3 = Color3.fromRGB(36, 36, 36)
+toolbar.BorderSizePixel = 1
+toolbar.BorderColor3 = Color3.fromRGB(60, 60, 60)
+toolbar.Active = true
+toolbar.Draggable = true
+toolbar.Parent = screenGui
+
+local layout = Instance.new("UIListLayout")
+layout.FillDirection = Enum.FillDirection.Horizontal
+layout.Padding = UDim.new(0, 4)
+layout.VerticalAlignment = Enum.VerticalAlignment.Center
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.Parent = toolbar
+
+-- ==========================================================
+-- SHAPE BAR
+-- ==========================================================
+
+local shapebar = Instance.new("Frame")
+shapebar.Size = UDim2.new(0, 260, 0, 35)
+shapebar.Position = UDim2.new(0.5, -130, 0, 130)
+shapebar.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+shapebar.BorderSizePixel = 1
+shapebar.BorderColor3 = Color3.fromRGB(50, 50, 50)
+shapebar.Parent = screenGui
+
+local shapeLayout = Instance.new("UIListLayout")
+shapeLayout.FillDirection = Enum.FillDirection.Horizontal
+shapeLayout.Padding = UDim.new(0, 4)
+shapeLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+shapeLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+shapeLayout.Parent = shapebar
+
+-- ==========================================================
+-- SNAP BAR
+-- ==========================================================
+
+local snapbar = Instance.new("Frame")
+snapbar.Size = UDim2.new(0, 320, 0, 35)
+snapbar.Position = UDim2.new(0.5, -160, 0, 170)
+snapbar.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+snapbar.BorderSizePixel = 1
+snapbar.BorderColor3 = Color3.fromRGB(45, 45, 45)
+snapbar.Parent = screenGui
+
+local snapLayout = Instance.new("UIListLayout")
+snapLayout.FillDirection = Enum.FillDirection.Horizontal
+snapLayout.Padding = UDim.new(0, 6)
+snapLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+snapLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+snapLayout.Parent = snapbar
+
+-- ==========================================================
+-- BUTTON HIGHLIGHTING
+-- ==========================================================
+
+_G.DexUpdateButtonHighlights = function(activeModeName)
+	for _, b in pairs(toolbar:GetChildren()) do
+		if b:IsA("TextButton")
+			and b.Text ~= "[X] Close"
+			and b.Text ~= "[-] Delete"
+		then
+
+			if b.Text == activeModeName then
+				if activeModeName == "Select" then
+					b.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+
+				elseif activeModeName == "Create" then
+					b.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+
+				elseif activeModeName == "Move" then
+					b.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+
+				elseif activeModeName == "Scale" then
+					b.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+
+				elseif activeModeName == "Rotate" then
+					b.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
+				end
+			else
+				b.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+			end
+		end
+	end
+end
+
+-- ==========================================================
+-- TOOL BUTTON CREATION
+-- ==========================================================
+
+local function createToolButton(name)
+	local btn = Instance.new("TextButton")
+
+	btn.Size = UDim2.new(0, 56, 0, 35)
+	btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+	btn.Text = name
+	btn.TextColor3 = Color3.fromRGB(220, 220, 220)
+	btn.Font = Enum.Font.SourceSansBold
+	btn.TextSize = 12
+	btn.BorderSizePixel = 0
+	btn.Parent = toolbar
+
+	btn.MouseButton1Click:Connect(function()
+		_G.DexCurrentMode = name
+
+		_G.DexUpdateButtonHighlights(name)
+
+		if name == "Create" then
+			_G.DexActivePart = nil
+		end
+
+		if _G.DexUpdateHandles then
+			_G.DexUpdateHandles(_G.DexActivePart)
+		end
+	end)
+end
+
+-- ==========================================================
+-- SHAPE BUTTON CREATION
+-- ==========================================================
+
+local function createShapeButton(name, color)
+	local btn = Instance.new("TextButton")
+
+	btn.Size = UDim2.new(0, 58, 0, 25)
+	btn.BackgroundColor3 =
+		name == "Block"
+		and color
+		or Color3.fromRGB(40, 40, 40)
+
+	btn.Text = name
+	btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+	btn.Font = Enum.Font.SourceSansBold
+	btn.TextSize = 11
+	btn.BorderSizePixel = 0
+	btn.Parent = shapebar
+
+	btn.MouseButton1Click:Connect(function()
+		_G.DexCurrentShape = name
+
+		for _, b in pairs(shapebar:GetChildren()) do
+			if b:IsA("TextButton") then
+				b.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+			end
+		end
+
+		btn.BackgroundColor3 = color
+	end)
+end
+
+-- ==========================================================
+-- CREATE TOOL BUTTONS
+-- ==========================================================
+
+createToolButton("Select")
+createToolButton("Create")
+createToolButton("Move")
+createToolButton("Scale")
+createToolButton("Rotate")
+
+_G.DexUpdateButtonHighlights("Select")
+
+-- ==========================================================
+-- CREATE SHAPE BUTTONS
+-- ==========================================================
+
+local shapeColor = Color3.fromRGB(0, 120, 215)
+
+createShapeButton("Block", shapeColor)
+createShapeButton("Wedge", shapeColor)
+createShapeButton("Sphere", shapeColor)
+createShapeButton("Cylinder", shapeColor)
+
+-- ==========================================================
+-- SNAP SETTINGS
+-- ==========================================================
+
+local moveList = {
+	0,
+	0.5,
+	1,
+	2,
+	3,
+	4,
+	8,
+	16
+}
+
+local rotateList = {
+	0,
+	15,
+	30,
+	45,
+	60,
+	75,
+	90
+}
+
+local currentMoveIdx = 1
+local currentRotIdx = 1
+
+local btnMoveSnap = Instance.new("TextButton")
+
+btnMoveSnap.Size = UDim2.new(0, 140, 0, 25)
+btnMoveSnap.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+btnMoveSnap.Text = "Move Snap: Smooth"
+btnMoveSnap.TextColor3 = Color3.fromRGB(180, 220, 180)
+btnMoveSnap.Font = Enum.Font.SourceSansBold
+btnMoveSnap.TextSize = 11
+btnMoveSnap.BorderSizePixel = 0
+btnMoveSnap.Parent = snapbar
+
+btnMoveSnap.MouseButton1Click:Connect(function()
+	currentMoveIdx += 1
+
+	if currentMoveIdx > #moveList then
+		currentMoveIdx = 1
+	end
+
+	local val = moveList[currentMoveIdx]
+
+	_G.DexMoveSnap = val
+
+	btnMoveSnap.Text =
+		"Move Snap: "
+		.. (
+			val == 0
+			and "Smooth"
+			or tostring(val) .. " Studs"
+		)
+end)
+
+local btnRotSnap = Instance.new("TextButton")
+
+btnRotSnap.Size = UDim2.new(0, 140, 0, 25)
+btnRotSnap.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+btnRotSnap.Text = "Rotate Snap: Smooth"
+btnRotSnap.TextColor3 = Color3.fromRGB(220, 180, 140)
+btnRotSnap.Font = Enum.Font.SourceSansBold
+btnRotSnap.TextSize = 11
+btnRotSnap.BorderSizePixel = 0
+btnRotSnap.Parent = snapbar
+
+btnRotSnap.MouseButton1Click:Connect(function()
+	currentRotIdx += 1
+
+	if currentRotIdx > #rotateList then
+		currentRotIdx = 1
+	end
+
+	local val = rotateList[currentRotIdx]
+
+	_G.DexRotateSnap = val
+
+	btnRotSnap.Text =
+		"Rotate Snap: "
+		.. (
+			val == 0
+			and "Smooth"
+			or tostring(val) .. "°"
+		)
+end)
+
+-- ==========================================================
+-- HANDLES
+-- ==========================================================
+
+local moveHandles = Instance.new("Handles")
+local scaleHandles = Instance.new("Handles")
+local rotateHandles = Instance.new("ArcHandles")
+
+local function setupHandle(handle, color)
+	handle.Visible = false
+	handle.Color3 = color
+	handle.Parent = screenGui
+end
+
+setupHandle(
+	moveHandles,
+	Color3.fromRGB(0, 150, 255)
+)
+
+setupHandle(
+	scaleHandles,
+	Color3.fromRGB(50, 205, 50)
+)
+
+setupHandle(
+	rotateHandles,
+	Color3.fromRGB(255, 69, 0)
+)
+
+-- ==========================================================
+-- SNAP FUNCTION
+-- ==========================================================
+
+local function snapValue(value, snap)
+	if snap == 0 then
+		return value
+	end
+
+	return math.round(value / snap) * snap
+end
+
+-- ==========================================================
+-- HANDLE MANAGEMENT
+-- ==========================================================
+
+_G.DexHideAllHandles = function()
+	moveHandles.Visible = false
+	scaleHandles.Visible = false
+	rotateHandles.Visible = false
+
+	moveHandles.Adornee = nil
+	scaleHandles.Adornee = nil
+	rotateHandles.Adornee = nil
+end
+
+_G.DexUpdateHandles = function(part)
+	_G.DexHideAllHandles()
+
+	if not part then
+		return
+	end
+
+	if not part:IsA("BasePart") then
+		return
+	end
+
+	if _G.DexCurrentMode == "Move" then
+		moveHandles.Adornee = part
+		moveHandles.Style = Enum.HandlesStyle.Movement
+		moveHandles.Visible = true
+
+	elseif _G.DexCurrentMode == "Scale" then
+		scaleHandles.Adornee = part
+		scaleHandles.Style = Enum.HandlesStyle.Resize
+		scaleHandles.Visible = true
+
+	elseif _G.DexCurrentMode == "Rotate" then
+		rotateHandles.Adornee = part
+		rotateHandles.Visible = true
+	end
+end
+
+-- ==========================================================
+-- MOVE LOGIC
+-- ==========================================================
+
+local startCFrame
+local startSize
+
+moveHandles.MouseButton1Down:Connect(function()
+	if _G.DexActivePart then
+		startCFrame = _G.DexActivePart.CFrame
+	end
+end)
+
+moveHandles.MouseDrag:Connect(function(face, distance)
+	if not _G.DexActivePart then
+		return
+	end
+
+	if not startCFrame then
+		return
+	end
+
+	local direction = Vector3.FromNormalId(face)
+
+	local snappedDistance =
+		snapValue(
+			distance,
+			_G.DexMoveSnap
+		)
+
+	_G.DexActivePart.CFrame =
+		startCFrame
+		* CFrame.new(
+			direction * snappedDistance
+		)
+end)
+
+-- ==========================================================
+-- SCALE LOGIC
+-- ==========================================================
+
+scaleHandles.MouseButton1Down:Connect(function()
+	if _G.DexActivePart then
+		startCFrame = _G.DexActivePart.CFrame
+		startSize = _G.DexActivePart.Size
+	end
+end)
+
+scaleHandles.MouseDrag:Connect(function(face, distance)
+	if not _G.DexActivePart then
+		return
+	end
+
+	if not startCFrame or not startSize then
+		return
+	end
+
+	local direction = Vector3.FromNormalId(face)
+
+	local snappedDistance =
+		snapValue(
+			distance,
+			_G.DexMoveSnap
+		)
+
+	local newSize =
+		startSize
+		+ direction * snappedDistance
+
+	newSize = Vector3.new(
+		math.max(0.1, newSize.X),
+		math.max(0.1, newSize.Y),
+		math.max(0.1, newSize.Z)
+	)
+
+	_G.DexActivePart.Size = newSize
+end)
+
+-- ==========================================================
+-- ROTATE LOGIC
+-- ==========================================================
+
+rotateHandles.MouseButton1Down:Connect(function()
+	if _G.DexActivePart then
+		startCFrame = _G.DexActivePart.CFrame
+	end
+end)
+
+rotateHandles.MouseDrag:Connect(function(axis, relativeAngle)
+	if not _G.DexActivePart then
+		return
+	end
+
+	if not startCFrame then
+		return
+	end
+
+	local axisVector =
+		Vector3.FromAxis(axis)
+
+	local degrees =
+		math.degrees(relativeAngle)
+
+	local snappedDegrees =
+		snapValue(
+			degrees,
+			_G.DexRotateSnap
+		)
+
+	local snappedAngle =
+		math.rad(snappedDegrees)
+
+	_G.DexActivePart.CFrame =
+		startCFrame
+		* CFrame.fromAxisAngle(
+			axisVector,
+			snappedAngle
+		)
+end)
+
+-- ==========================================================
+-- DELETE
+-- ==========================================================
+
+_G.DexRunDeleteAction = function()
+	local part = _G.DexActivePart
+
+	if not part then
+		return
+	end
+
+	if part.Name ~= "DexStudioSpawnedPart" then
+		return
+	end
+
+	part:Destroy()
+
+	_G.DexActivePart = nil
+
+	_G.DexHideAllHandles()
+end
+
+-- ==========================================================
+-- DELETE BUTTON
+-- ==========================================================
+
+local btnDelete = Instance.new("TextButton")
+
+btnDelete.Size = UDim2.new(0, 60, 0, 35)
+btnDelete.BackgroundColor3 = Color3.fromRGB(180, 70, 70)
+btnDelete.Text = "[-] Delete"
+btnDelete.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnDelete.Font = Enum.Font.SourceSansBold
+btnDelete.TextSize = 12
+btnDelete.BorderSizePixel = 0
+btnDelete.Parent = toolbar
+
+btnDelete.MouseButton1Click:Connect(function()
+	_G.DexRunDeleteAction()
+end)
+
+-- ==========================================================
+-- CLOSE BUTTON
+-- ==========================================================
+
+local btnClose = Instance.new("TextButton")
+
+btnClose.Size = UDim2.new(0, 60, 0, 35)
+btnClose.BackgroundColor3 = Color3.fromRGB(100, 40, 40)
+btnClose.Text = "[X] Close"
+btnClose.TextColor3 = Color3.fromRGB(255, 255, 255)
+btnClose.Font = Enum.Font.SourceSansBold
+btnClose.TextSize = 12
+btnClose.BorderSizePixel = 0
+btnClose.Parent = toolbar
+
+btnClose.MouseButton1Click:Connect(function()
+	_G.DexHideAllHandles()
+
+	screenGui:Destroy()
+
+	_G.DexDraggerEngine = nil
+end)
+
+-- ==========================================================
+-- CREATE PART
+-- ==========================================================
+
+local function createPart()
+	local spawnPart
+
+	if _G.DexCurrentShape == "Block" then
+		spawnPart = Instance.new("Part")
+
+		spawnPart.Shape =
+			Enum.PartType.Block
+
+	elseif _G.DexCurrentShape == "Wedge" then
+		spawnPart =
+			Instance.new("WedgePart")
+
+	elseif _G.DexCurrentShape == "Sphere" then
+		spawnPart =
+			Instance.new("Part")
+
+		spawnPart.Shape =
+			Enum.PartType.Ball
+
+	elseif _G.DexCurrentShape == "Cylinder" then
+		spawnPart =
+			Instance.new("Part")
+
+		spawnPart.Shape =
+			Enum.PartType.Cylinder
+	end
+
+	if not spawnPart then
+		return
+	end
+
+	spawnPart.Size =
+		Vector3.new(4, 4, 4)
+
+	spawnPart.Name =
+		"DexStudioSpawnedPart"
+
+	spawnPart.Material =
+		Enum.Material.SmoothPlastic
+
+	spawnPart.Color =
+		Color3.fromRGB(
+			163,
+			162,
+			165
+		)
+
+	spawnPart.Anchored = true
+
+	local hitPosition =
+		mouse.Hit.Position
+
+	local rawPos =
+		hitPosition
+		+ Vector3.new(
+			0,
+			spawnPart.Size.Y / 2,
+			0
+		)
+
+	spawnPart.Position =
+		Vector3.new(
+			snapValue(
+				rawPos.X,
+				_G.DexMoveSnap
+			),
+
+			snapValue(
+				rawPos.Y,
+				_G.DexMoveSnap
+			),
+
+			snapValue(
+				rawPos.Z,
+				_G.DexMoveSnap
+			)
+		)
+
+	spawnPart.Parent = workspace
+
+	_G.DexActivePart = spawnPart
+	_G.DexCurrentMode = "Move"
+
+	_G.DexUpdateButtonHighlights("Move")
+	_G.DexUpdateHandles(spawnPart)
+end
+
+-- ==========================================================
+-- KEYBOARD / MOUSE INPUT
+-- ==========================================================
+
+local inputConnection
+
+inputConnection =
+	UserInputService.InputBegan:Connect(
+		function(input, gameProcessed)
+
+			if not _G.DexDraggerEngine then
+				inputConnection:Disconnect()
+				return
+			end
+
+			if gameProcessed then
+				return
+			end
+
+			local targetMode
+
+			if input.KeyCode == Enum.KeyCode.One then
+				targetMode = "Select"
+
+			elseif input.KeyCode == Enum.KeyCode.Two then
+				targetMode = "Move"
+
+			elseif input.KeyCode == Enum.KeyCode.Three then
+				targetMode = "Scale"
+
+			elseif input.KeyCode == Enum.KeyCode.Four then
+				targetMode = "Rotate"
+
+			elseif input.KeyCode == Enum.KeyCode.Five then
+				targetMode = "Create"
+
+			elseif input.KeyCode == Enum.KeyCode.Delete then
+				_G.DexRunDeleteAction()
+				return
+			end
+
+			if targetMode then
+				_G.DexCurrentMode =
+					targetMode
+
+				_G.DexUpdateButtonHighlights(
+					targetMode
+				)
+
+				if targetMode == "Create" then
+					_G.DexActivePart = nil
+				end
+
+				_G.DexUpdateHandles(
+					_G.DexActivePart
+				)
+
+				return
+			end
+
+			if input.UserInputType
+				~= Enum.UserInputType.MouseButton1
+			then
+				return
+			end
+
+			-- CREATE MODE
+			if _G.DexCurrentMode == "Create" then
+				if mouse.Target then
+					createPart()
+				end
+
+				return
+			end
+
+			-- SELECTION / TOOL MODES
+			if _G.DexCurrentMode == "Select"
+				or _G.DexCurrentMode == "Move"
+				or _G.DexCurrentMode == "Scale"
+				or _G.DexCurrentMode == "Rotate"
+			then
+
+				if moveHandles.Visible
+					and moveHandles.Adornee
+				then
+					return
+				end
+
+				if scaleHandles.Visible
+					and scaleHandles.Adornee
+				then
+					return
+				end
+
+				if rotateHandles.Visible
+					and rotateHandles.Adornee
+				then
+					return
+				end
+
+				local target =
+					mouse.Target
+
+				if target
+					and (
+						not player.Character
+						or not target:IsDescendantOf(
+							player.Character
+						)
+					)
+				then
+
+					_G.DexActivePart =
+						target
+
+					_G.DexUpdateHandles(
+						target
+					)
+
+				else
+					_G.DexActivePart =
+						nil
+
+					_G.DexHideAllHandles()
+				end
+			end
+		end
+	)
+
+print("Advanced Studio Dragger Engine Loaded!")
+```
