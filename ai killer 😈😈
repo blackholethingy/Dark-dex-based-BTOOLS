@@ -1,452 +1,2106 @@
--- PART 1: INTERFACE SETUP (Place this first)
+-- ==========================================================
+-- AUTO PLAYER TRACKER
+-- BUILT AROUND THE WORKING walkToTarget() PATH LOGIC
+-- ==========================================================
+
 local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
 local localPlayer = Players.LocalPlayer
 
-_G.TargetPlayer = nil
-_G.SelectedToolName = nil
-_G.IsScriptRunning = true
+if not localPlayer then
+	error("LocalPlayer unavailable.")
+end
 
-----------------------------------------------------------------
--- 1. UTILITY: SAFE CHARACTER FETCHING FOR CUSTOM FOLDER
-----------------------------------------------------------------
-_G.GetMyCharacter = function()
-	local customFolder = workspace:FindFirstChild("Characters")
-	if customFolder then
-		return customFolder:FindFirstChild("AreWeAloneOnEarth")
+local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- ==========================================================
+-- SETTINGS
+-- ==========================================================
+
+local ATTACK_RANGE = 8
+local STOP_DISTANCE = 5
+
+local PATH_REPATH_DISTANCE = 6
+
+local PATH_AGENT_RADIUS = 2.0
+local PATH_AGENT_HEIGHT = 5
+local PATH_WAYPOINT_SPACING = 2.5
+
+local NODE_TIMEOUT = 1.5
+
+local NORMAL_NODE_DISTANCE = 4.5
+local FINAL_NODE_DISTANCE = 0.5
+
+local STUCK_CHECK_TIME = 0.8
+local STUCK_DISTANCE = 1.2
+
+-- ==========================================================
+-- CLEAN PREVIOUS RUN
+-- ==========================================================
+
+if _G.PlayerTrackerCleanup then
+	pcall(_G.PlayerTrackerCleanup)
+end
+
+-- ==========================================================
+-- STATE
+-- ==========================================================
+
+local running = true
+
+local targetPlayer = nil
+local selectedToolName = nil
+
+local currentPathToken = 0
+local pathWorkerRunning = false
+
+local connections = {}
+
+-- ==========================================================
+-- CONNECTION HELPER
+-- ==========================================================
+
+local function trackConnection(connection)
+	table.insert(connections, connection)
+	return connection
+end
+
+-- ==========================================================
+-- CHARACTER HELPERS
+-- ==========================================================
+
+local function getMyCharacter()
+	local folder = workspace:FindFirstChild("Characters")
+
+	if folder then
+		local named = folder:FindFirstChild(localPlayer.Name)
+
+		if named then
+			return named
+		end
+
+		local special = folder:FindFirstChild("AreWeAloneOnEarth")
+
+		if special then
+			return special
+		end
 	end
+
 	return localPlayer.Character
 end
 
-_G.GetTargetCharacter = function(player)
-	if not player then return nil end
-	local customFolder = workspace:FindFirstChild("Characters")
-	if customFolder then
-		return customFolder:FindFirstChild(player.Name)
+local function getTargetCharacter(player)
+	if not player then
+		return nil
 	end
+
+	local folder = workspace:FindFirstChild("Characters")
+
+	if folder then
+		local custom = folder:FindFirstChild(player.Name)
+
+		if custom then
+			return custom
+		end
+	end
+
 	return player.Character
 end
 
-----------------------------------------------------------------
--- 2. DYNAMIC GUI DESIGN PATTERNS
-----------------------------------------------------------------
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "AutoTrackerGui"
-screenGui.ResetOnSpawn = false
-screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
-
-_G.MainFrame = Instance.new("Frame")
-_G.MainFrame.Size = UDim2.new(0, 220, 0, 460)
-_G.MainFrame.Position = UDim2.new(0, 20, 0.5, -230)
-_G.MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-_G.MainFrame.BorderSizePixel = 0
-_G.MainFrame.Parent = screenGui
-
-local playerTitle = Instance.new("TextLabel")
-playerTitle.Size = UDim2.new(1, 0, 0, 30)
-playerTitle.Text = "TARGET PLAYER"
-playerTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
-playerTitle.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-playerTitle.Font = Enum.Font.SourceSansBold
-playerTitle.TextSize = 14
-playerTitle.Parent = _G.MainFrame
-
-_G.PlayerScroller = Instance.new("ScrollingFrame")
-_G.PlayerScroller.Size = UDim2.new(1, 0, 0, 150)
-_G.PlayerScroller.Position = UDim2.new(0, 0, 0, 30)
-_G.PlayerScroller.BackgroundTransparency = 1
-_G.PlayerScroller.ScrollBarThickness = 6
-_G.PlayerScroller.Parent = _G.MainFrame
-
-_G.PlayerLayout = Instance.new("UIListLayout")
-_G.PlayerLayout.Padding = UDim.new(0, 4)
-_G.PlayerLayout.Parent = _G.PlayerScroller
-
-local toolTitle = Instance.new("TextLabel")
-toolTitle.Size = UDim2.new(1, 0, 0, 30)
-toolTitle.Position = UDim2.new(0, 0, 0, 185)
-toolTitle.Text = "CHOOSE WEAPON"
-toolTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
-toolTitle.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-toolTitle.Font = Enum.Font.SourceSansBold
-toolTitle.TextSize = 14
-toolTitle.Parent = _G.MainFrame
-
-_G.ToolScroller = Instance.new("ScrollingFrame")
-_G.ToolScroller.Size = UDim2.new(1, 0, 0, 150)
-_G.ToolScroller.Position = UDim2.new(0, 0, 0, 215)
-_G.ToolScroller.BackgroundTransparency = 1
-_G.ToolScroller.ScrollBarThickness = 6
-_G.ToolScroller.Parent = _G.MainFrame
-
-_G.ToolLayout = Instance.new("UIListLayout")
-_G.ToolLayout.Padding = UDim.new(0, 4)
-_G.ToolLayout.Parent = _G.ToolScroller
-
-_G.StopButton = Instance.new("TextButton")
-_G.StopButton.Size = UDim2.new(1, -10, 0, 30)
-_G.StopButton.Position = UDim2.new(0, 5, 1, -80)
-_G.StopButton.Text = "STOP ACTIONS [X]"
-_G.StopButton.Font = Enum.Font.SourceSansBold
-_G.StopButton.TextSize = 13
-_G.StopButton.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
-_G.StopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-_G.StopButton.BorderSizePixel = 0
-_G.StopButton.Parent = _G.MainFrame
-
-_G.KillButton = Instance.new("TextButton")
-_G.KillButton.Size = UDim2.new(1, -10, 0, 35)
-_G.KillButton.Position = UDim2.new(0, 5, 1, -45)
-_G.KillButton.Text = "KILL SCRIPT"
-_G.KillButton.Font = Enum.Font.SourceSansBold
-_G.KillButton.TextSize = 14
-_G.KillButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-_G.KillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-_G.KillButton.BorderSizePixel = 0
-_G.KillButton.Parent = _G.MainFrame
--- PART 2: FEED LIST MANIPULATIONS (Place this second)
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local localPlayer = Players.LocalPlayer
-
-----------------------------------------------------------------
--- 3. DYNAMIC DATA DRAW PATTERNS
-----------------------------------------------------------------
-_G.UpdatePlayerList = function()
-	if not _G.IsScriptRunning then return end
-	if not _G.PlayerScroller then return end
-	for _, child in ipairs(_G.PlayerScroller:GetChildren()) do
-		if child:IsA("TextButton") then child:Destroy() end
+local function getCharacterState(character)
+	if not character then
+		return nil, nil, nil
 	end
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= localPlayer then
-			local btn = Instance.new("TextButton")
-			btn.Size = UDim2.new(1, -10, 0, 30)
-			btn.Text = player.Name
-			btn.Font = Enum.Font.SourceSans
-			btn.TextSize = 14
-			btn.BackgroundColor3 = (_G.TargetPlayer == player) and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(60, 60, 60)
-			btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-			btn.BorderSizePixel = 0
-			btn.Parent = _G.PlayerScroller
+	local humanoid =
+		character:FindFirstChildOfClass("Humanoid")
 
-			btn.MouseButton1Click:Connect(function()
-				_G.TargetPlayer = (_G.TargetPlayer == player) and nil or player
-				_G.UpdatePlayerList()
-				if _G.RenderVisualPath then _G.RenderVisualPath() end
-			end)
-		end
+	local root =
+		character:FindFirstChild("HumanoidRootPart")
+
+	if humanoid
+		and root
+		and humanoid.Health > 0
+	then
+		return character, humanoid, root
 	end
-	_G.PlayerScroller.CanvasSize = UDim2.new(0, 0, 0, _G.PlayerLayout.AbsoluteContentSize.Y)
+
+	return nil, nil, nil
 end
 
-_G.UpdateToolList = function()
-	if not _G.IsScriptRunning then return end
-	if not _G.ToolScroller then return end
-	for _, child in ipairs(_G.ToolScroller:GetChildren()) do
-		if child:IsA("TextButton") then child:Destroy() end
+local function getTargetPosition(character)
+	if not character then
+		return nil
 	end
 
-	local backpack = localPlayer:FindFirstChild("Backpack")
-	local character = _G.GetMyCharacter and _G.GetMyCharacter()
-	
-	local function scanDirectory(dir)
-		if not dir then return end
-		for _, item in ipairs(dir:GetChildren()) do
-			if item:IsA("Tool") then
-				local btn = Instance.new("TextButton")
-				btn.Size = UDim2.new(1, -10, 0, 30)
-				btn.Text = item.Name
-				btn.Font = Enum.Font.SourceSans
-				btn.TextSize = 14
-				btn.BackgroundColor3 = (_G.SelectedToolName == item.Name) and Color3.fromRGB(0, 120, 200) or Color3.fromRGB(60, 60, 60)
-				btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-				btn.BorderSizePixel = 0
-				btn.Parent = _G.ToolScroller
+	local root =
+		character:FindFirstChild("HumanoidRootPart")
 
-				btn.MouseButton1Click:Connect(function()
-					_G.SelectedToolName = (_G.SelectedToolName == item.Name) and nil or item.Name
-					_G.UpdateToolList()
-				end)
-			end
-		end
+	if root then
+		return root.Position
 	end
 
-	scanDirectory(backpack)
-	scanDirectory(character)
-	_G.ToolScroller.CanvasSize = UDim2.new(0, 0, 0, _G.ToolLayout.AbsoluteContentSize.Y)
-end
-
-----------------------------------------------------------------
--- 4. EMERGENCY CANCELLATION AND STOP CONNECTIONS
-----------------------------------------------------------------
-_G.StopAllTracking = function()
-	_G.TargetPlayer = nil
-	_G.SelectedToolName = nil
-	_G.ActiveWaypoints = {}
-	if _G.ClearVisualMarkers then _G.ClearVisualMarkers() end
-	
-	local character = _G.GetMyCharacter and _G.GetMyCharacter()
-	if character then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		local rootPart = character:FindFirstChild("HumanoidRootPart")
-		if humanoid and rootPart then
-			humanoid:MoveTo(rootPart.Position)
-		end
-		
-		local equippedTool = character:FindFirstChildOfClass("Tool")
-		local backpack = localPlayer:FindFirstChild("Backpack")
-		if equippedTool and backpack then
-			equippedTool.Parent = backpack
-		end
-	end
-	
-	_G.UpdatePlayerList()
-	_G.UpdateToolList()
-	print("Halted tracking operations securely.")
-end
-
-if _G.StopButton then
-	_G.StopButton.MouseButton1Click:Connect(_G.StopAllTracking)
-end
-
-_G.InputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.X then
-		_G.StopAllTracking()
-	end
-end)
-
-Players.PlayerAdded:Connect(_G.UpdatePlayerList)
-Players.PlayerRemoving:Connect(function(p) if _G.TargetPlayer == p then _G.TargetPlayer = nil end _G.UpdatePlayerList() end)
-localPlayer:WaitForChild("Backpack").ChildAdded:Connect(_G.UpdateToolList)
-localPlayer.Backpack.ChildRemoved:Connect(_G.UpdateToolList)
-
-_G.UpdatePlayerList()
-_G.UpdateToolList()
--- PART 3: ENGINE LOOPS AND RENDER NODES (Place this third)
-local PathfindingService = game:GetService("PathfindingService")
-local RunService = game:GetService("RunService")
-local localPlayer = game:GetService("Players").LocalPlayer
-
-local ATTACK_RANGE = 8
-local PATH_RECALC_TIME = 0.5
-local lastPathUpdateTime = 0
-
-local visualFolder = workspace:FindFirstChild("TrackerVisuals")
-if not visualFolder then
-	visualFolder = Instance.new("Folder")
-	visualFolder.Name = "TrackerVisuals"
-	visualFolder.Parent = workspace
-end
-
-local targetHighlight = workspace:FindFirstChild("TargetTrackerHighlight") or Instance.new("Highlight")
-targetHighlight.Name = "TargetTrackerHighlight"
-targetHighlight.FillColor = Color3.fromRGB(0, 255, 0)
-targetHighlight.FillTransparency = 0.65
-targetHighlight.OutlineColor = Color3.fromRGB(0, 255, 0)
-targetHighlight.OutlineTransparency = 0
-targetHighlight.Enabled = false
-targetHighlight.Parent = workspace
-
-local targetBox = visualFolder:FindFirstChild("TargetMarker") or Instance.new("Part")
-targetBox.Name = "TargetMarker"
-targetBox.Size = Vector3.new(2.2, 0.1, 2.2) 
-targetBox.Color = Color3.fromRGB(0, 255, 0)
-targetBox.Material = Enum.Material.Neon
-targetBox.Transparency = 1 
-targetBox.Anchored = true
-targetBox.CanCollide = false
-targetBox.CastShadow = false
-targetBox.Parent = visualFolder
-
--- Initialize specialized GPU Attachments and a single straight target beam
-local playerOriginAttachment = Instance.new("Attachment")
-playerOriginAttachment.Name = "TrackerPlayerOriginAttachment"
-
-local targetAttachment = Instance.new("Attachment")
-targetAttachment.Name = "TrackerTargetAttachment"
-targetAttachment.Parent = targetBox
-
-local pathBeam = visualFolder:FindFirstChild("TrackerPathBeam") or Instance.new("Beam")
-pathBeam.Name = "TrackerPathBeam"
-pathBeam.Attachment0 = playerOriginAttachment
-pathBeam.Attachment1 = targetAttachment
-pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) 
-pathBeam.Width0 = 0.4 
-pathBeam.Width1 = 0.4 
-pathBeam.LightEmission = 1 
-pathBeam.LightInfluence = 0 
-pathBeam.FaceCamera = true
-pathBeam.Enabled = false
-pathBeam.Parent = visualFolder
-
-_G.ClearVisualMarkers = function()
-	targetHighlight.Enabled = false
-	targetHighlight.Adornee = nil
-	targetBox.Transparency = 1
-	pathBeam.Enabled = false
-	playerOriginAttachment.Parent = nil
-end
-
-local function getExactFeetPositionR6(character)
-	if not character then return nil end
-	local leftLeg = character:FindFirstChild("Left Leg")
-	local rightLeg = character:FindFirstChild("Right Leg")
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	
-	local targetLeg = leftLeg or rightLeg
-	if targetLeg and targetLeg:IsA("BasePart") then
-		return targetLeg.Position - Vector3.new(0, targetLeg.Size.Y / 2, 0)
-	end
-	if rootPart then
-		return rootPart.Position - Vector3.new(0, 3, 0)
-	end
 	return nil
 end
 
-----------------------------------------------------------------
--- 5. VISUAL LOOP (RUNS INDEPENDENTLY ON FRAME RATE - STRAIGHT LINE)
-----------------------------------------------------------------
-_G.RenderVisualPath = function()
-	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
-	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
-	
-	if not targetCharacter or not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then
-		_G.ClearVisualMarkers()
-		return 
-	end
-	
-	local myRoot = myCharacter.HumanoidRootPart
-	local trueFeetPos = getExactFeetPositionR6(targetCharacter)
-	
-	if trueFeetPos then
-		targetHighlight.Adornee = targetCharacter
-		targetHighlight.Enabled = true
-		
-		-- Lock green plate flat to floor
-		targetBox.Position = trueFeetPos + Vector3.new(0, 0.05, 0)
-		targetBox.Transparency = 0
-		
-		-- FORCE STRAIGHT BEAM LINE: Maps from point A to point B directly
-		playerOriginAttachment.Parent = myRoot
-		pathBeam.Enabled = true
+-- ==========================================================
+-- GUI CLEANUP
+-- ==========================================================
+
+local oldGui =
+	playerGui:FindFirstChild("PlayerPathTrackerGui")
+
+if oldGui then
+	oldGui:Destroy()
+end
+
+local oldVisuals =
+	workspace:FindFirstChild("PlayerTrackerVisuals")
+
+if oldVisuals then
+	oldVisuals:Destroy()
+end
+
+-- ==========================================================
+-- GUI
+-- ==========================================================
+
+local screenGui =
+	Instance.new("ScreenGui")
+
+screenGui.Name =
+	"PlayerPathTrackerGui"
+
+screenGui.ResetOnSpawn =
+	false
+
+screenGui.Parent =
+	playerGui
+
+local mainFrame =
+	Instance.new("Frame")
+
+mainFrame.Size =
+	UDim2.new(
+		0,
+		230,
+		0,
+		500
+	)
+
+mainFrame.Position =
+	UDim2.new(
+		0,
+		20,
+		0.5,
+		-250
+	)
+
+mainFrame.BackgroundColor3 =
+	Color3.fromRGB(
+		34,
+		34,
+		38
+	)
+
+mainFrame.BorderSizePixel =
+	0
+
+mainFrame.Active =
+	true
+
+mainFrame.Draggable =
+	true
+
+mainFrame.Parent =
+	screenGui
+
+-- ==========================================================
+-- TITLE
+-- ==========================================================
+
+local title =
+	Instance.new("TextLabel")
+
+title.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		32
+	)
+
+title.BackgroundColor3 =
+	Color3.fromRGB(
+		24,
+		24,
+		27
+	)
+
+title.BorderSizePixel =
+	0
+
+title.Text =
+	"PLAYER PATH TRACKER"
+
+title.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+title.Font =
+	Enum.Font.SourceSansBold
+
+title.TextSize =
+	15
+
+title.Parent =
+	mainFrame
+
+-- ==========================================================
+-- STATUS
+-- ==========================================================
+
+local statusLabel =
+	Instance.new("TextLabel")
+
+statusLabel.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		28
+	)
+
+statusLabel.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		36
+	)
+
+statusLabel.BackgroundColor3 =
+	Color3.fromRGB(
+		43,
+		43,
+		48
+	)
+
+statusLabel.BorderSizePixel =
+	0
+
+statusLabel.Text =
+	"Status: Idle"
+
+statusLabel.TextColor3 =
+	Color3.fromRGB(
+		210,
+		210,
+		210
+	)
+
+statusLabel.Font =
+	Enum.Font.SourceSans
+
+statusLabel.TextSize =
+	13
+
+statusLabel.Parent =
+	mainFrame
+
+local function setStatus(text)
+	if statusLabel
+		and statusLabel.Parent
+	then
+		statusLabel.Text =
+			"Status: " .. text
 	end
 end
 
-----------------------------------------------------------------
--- 6. INDEPENDENT MOVEMENT ASYNC LOOP (RUNS TRUE PATHFINDING)
-----------------------------------------------------------------
-local function followPathfindingWaypoints(character, humanoid, rootPart, trueFeetPos)
-	local path = PathfindingService:CreatePath({
-		AgentRadius = 3,
-		AgentHeight = 5,
-		AgentCanJump = true
-	})
-	
-	local success, _ = pcall(function() path:ComputeAsync(rootPart.Position, trueFeetPos) end)
-	if success and path.Status == Enum.PathStatus.Success then
-		local waypoints = path:GetWaypoints()
-		
-		-- Step through waypoints asynchronously without frame-rate loop interference
-		for i = 2, #waypoints do
-			-- Abort if user deselected target or killed script midway
-			if not _G.IsScriptRunning or not _G.TargetPlayer then break end
-			
-			local wp = waypoints[i]
-			local flatPlayerPos = Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z)
-			local flatWaypointPos = Vector3.new(wp.Position.X, 0, wp.Position.Z)
-			
-			if wp.Action == Enum.PathWaypointAction.Jump then 
-				humanoid.Jump = true 
-			end
-			
-			-- Tell character to walk to this corner point specifically
-			humanoid:MoveTo(wp.Position)
-			
-			-- Keep moving until character gets close to the corner point
-			while (flatPlayerPos - flatWaypointPos).Magnitude >= 2.5 and _G.IsScriptRunning and _G.TargetPlayer == game:GetService("Players"):GetPlayerFromCharacter(wp.Parent) do
-				task.wait()
-				flatPlayerPos = Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z)
-			end
-		end
-	else
-		-- Fallback direct command if path computation drops out
-		humanoid:MoveTo(trueFeetPos)
-	end
+-- ==========================================================
+-- PLAYER HEADER
+-- ==========================================================
+
+local playerHeader =
+	Instance.new("TextLabel")
+
+playerHeader.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		25
+	)
+
+playerHeader.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		70
+	)
+
+playerHeader.BackgroundColor3 =
+	Color3.fromRGB(
+		25,
+		25,
+		28
+	)
+
+playerHeader.BorderSizePixel =
+	0
+
+playerHeader.Text =
+	"TARGET PLAYER"
+
+playerHeader.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+playerHeader.Font =
+	Enum.Font.SourceSansBold
+
+playerHeader.TextSize =
+	13
+
+playerHeader.Parent =
+	mainFrame
+
+-- ==========================================================
+-- PLAYER LIST
+-- ==========================================================
+
+local playerScroller =
+	Instance.new("ScrollingFrame")
+
+playerScroller.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		135
+	)
+
+playerScroller.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		97
+	)
+
+playerScroller.BackgroundColor3 =
+	Color3.fromRGB(
+		40,
+		40,
+		44
+	)
+
+playerScroller.BorderSizePixel =
+	0
+
+playerScroller.ScrollBarThickness =
+	5
+
+playerScroller.CanvasSize =
+	UDim2.new()
+
+playerScroller.Parent =
+	mainFrame
+
+local playerLayout =
+	Instance.new("UIListLayout")
+
+playerLayout.Padding =
+	UDim.new(
+		0,
+		3
+	)
+
+playerLayout.Parent =
+	playerScroller
+
+-- ==========================================================
+-- TOOL HEADER
+-- ==========================================================
+
+local toolHeader =
+	Instance.new("TextLabel")
+
+toolHeader.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		25
+	)
+
+toolHeader.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		238
+	)
+
+toolHeader.BackgroundColor3 =
+	Color3.fromRGB(
+		25,
+		25,
+		28
+	)
+
+toolHeader.BorderSizePixel =
+	0
+
+toolHeader.Text =
+	"SELECT WEAPON"
+
+toolHeader.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+toolHeader.Font =
+	Enum.Font.SourceSansBold
+
+toolHeader.TextSize =
+	13
+
+toolHeader.Parent =
+	mainFrame
+
+-- ==========================================================
+-- TOOL LIST
+-- ==========================================================
+
+local toolScroller =
+	Instance.new("ScrollingFrame")
+
+toolScroller.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		135
+	)
+
+toolScroller.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		265
+	)
+
+toolScroller.BackgroundColor3 =
+	Color3.fromRGB(
+		40,
+		40,
+		44
+	)
+
+toolScroller.BorderSizePixel =
+	0
+
+toolScroller.ScrollBarThickness =
+	5
+
+toolScroller.CanvasSize =
+	UDim2.new()
+
+toolScroller.Parent =
+	mainFrame
+
+local toolLayout =
+	Instance.new("UIListLayout")
+
+toolLayout.Padding =
+	UDim.new(
+		0,
+		3
+	)
+
+toolLayout.Parent =
+	toolScroller
+
+-- ==========================================================
+-- STOP BUTTON
+-- ==========================================================
+
+local stopButton =
+	Instance.new("TextButton")
+
+stopButton.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		35
+	)
+
+stopButton.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		410
+	)
+
+stopButton.BackgroundColor3 =
+	Color3.fromRGB(
+		195,
+		120,
+		15
+	)
+
+stopButton.BorderSizePixel =
+	0
+
+stopButton.Text =
+	"STOP TRACKING [X]"
+
+stopButton.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+stopButton.Font =
+	Enum.Font.SourceSansBold
+
+stopButton.TextSize =
+	14
+
+stopButton.Parent =
+	mainFrame
+
+-- ==========================================================
+-- KILL BUTTON
+-- ==========================================================
+
+local killButton =
+	Instance.new("TextButton")
+
+killButton.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		35
+	)
+
+killButton.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		452
+	)
+
+killButton.BackgroundColor3 =
+	Color3.fromRGB(
+		180,
+		45,
+		45
+	)
+
+killButton.BorderSizePixel =
+	0
+
+killButton.Text =
+	"KILL SCRIPT"
+
+killButton.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+killButton.Font =
+	Enum.Font.SourceSansBold
+
+killButton.TextSize =
+	14
+
+killButton.Parent =
+	mainFrame
+
+-- ==========================================================
+-- VISUAL FOLDER
+-- ==========================================================
+
+local visualFolder =
+	Instance.new("Folder")
+
+visualFolder.Name =
+	"PlayerTrackerVisuals"
+
+visualFolder.Parent =
+	workspace
+
+-- ==========================================================
+-- TARGET HIGHLIGHT
+-- ==========================================================
+
+local targetHighlight =
+	Instance.new("Highlight")
+
+targetHighlight.Name =
+	"PlayerTrackerHighlight"
+
+targetHighlight.FillColor =
+	Color3.fromRGB(
+		0,
+		255,
+		80
+	)
+
+targetHighlight.FillTransparency =
+	0.7
+
+targetHighlight.OutlineColor =
+	Color3.fromRGB(
+		0,
+		255,
+		80
+	)
+
+targetHighlight.OutlineTransparency =
+	0
+
+targetHighlight.Enabled =
+	false
+
+targetHighlight.Parent =
+	visualFolder
+
+-- ==========================================================
+-- TARGET MARKER
+-- ==========================================================
+
+local marker =
+	Instance.new("Part")
+
+marker.Name =
+	"PlayerTargetMarker"
+
+marker.Size =
+	Vector3.new(
+		2.5,
+		0.1,
+		2.5
+	)
+
+marker.Anchored =
+	true
+
+marker.CanCollide =
+	false
+
+marker.CanTouch =
+	false
+
+marker.CanQuery =
+	false
+
+marker.CastShadow =
+	false
+
+marker.Material =
+	Enum.Material.Neon
+
+marker.Color =
+	Color3.fromRGB(
+		0,
+		255,
+		80
+	)
+
+marker.Transparency =
+	1
+
+marker.Parent =
+	visualFolder
+
+-- ==========================================================
+-- BEAM
+-- ==========================================================
+
+local playerAttachment =
+	Instance.new("Attachment")
+
+playerAttachment.Name =
+	"PlayerTrackerOrigin"
+
+local targetAttachment =
+	Instance.new("Attachment")
+
+targetAttachment.Name =
+	"PlayerTrackerDestination"
+
+targetAttachment.Parent =
+	marker
+
+local beam =
+	Instance.new("Beam")
+
+beam.Name =
+	"PlayerTrackerBeam"
+
+beam.Attachment0 =
+	playerAttachment
+
+beam.Attachment1 =
+	targetAttachment
+
+beam.Width0 =
+	0.35
+
+beam.Width1 =
+	0.35
+
+beam.FaceCamera =
+	true
+
+beam.LightEmission =
+	1
+
+beam.LightInfluence =
+	0
+
+beam.Color =
+	ColorSequence.new(
+		Color3.fromRGB(
+			255,
+			0,
+			0
+		)
+	)
+
+beam.Enabled =
+	false
+
+beam.Parent =
+	visualFolder
+
+-- ==========================================================
+-- VISUAL CONTROL
+-- ==========================================================
+
+local function clearVisuals()
+
+	targetHighlight.Enabled =
+		false
+
+	targetHighlight.Adornee =
+		nil
+
+	marker.Transparency =
+		1
+
+	beam.Enabled =
+		false
+
+	playerAttachment.Parent =
+		nil
 end
 
-local function autoRunLoop()
-	local guiCheck = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
-	if not guiCheck or not _G.IsScriptRunning then
-		_G.IsScriptRunning = false
-		if _G.LoopConnection then _G.LoopConnection:Disconnect() _G.LoopConnection = nil end
-		if _G.InputConnection then _G.InputConnection:Disconnect() _G.InputConnection = nil end
-		_G.ClearVisualMarkers()
+local function updateVisuals()
+
+	if not running
+		or not targetPlayer
+	then
+		clearVisuals()
 		return
 	end
 
-	local character = _G.GetMyCharacter and _G.GetMyCharacter()
-	if not character then return end
-	
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not rootPart or humanoid.Health <= 0 then return end
+	local character =
+		getMyCharacter()
 
-	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
-	if targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart") then
-		local targetRoot = targetCharacter.HumanoidRootPart
-		local targetHumanoid = targetCharacter:FindFirstChildOfClass("Humanoid")
-		
-		if targetHumanoid and targetHumanoid.Health > 0 then
-			local trueFeetPos = getExactFeetPositionR6(targetCharacter) or (targetRoot.Position - Vector3.new(0, 3, 0))
-			local distance = (rootPart.Position - targetRoot.Position).Magnitude
-			
-			-- Render visual straight beam on every single frame tick
-			_G.RenderVisualPath()
-			
-			-- Separate the pathfinding movement thread completely from the frame update lock
-			local now = tick()
-			if now - lastPathUpdateTime > PATH_RECALC_TIME then
-				lastPathUpdateTime = now
-				task.spawn(followPathfindingWaypoints, character, humanoid, rootPart, trueFeetPos)
-			end
-			
-			-- Tool Weapon Activation
-			if _G.SelectedToolName then
-				local equippedTool = character:FindFirstChild(_G.SelectedToolName)
-				if not equippedTool then
-					local backpack = localPlayer:FindFirstChild("Backpack")
-					local targetTool = backpack and backpack:FindFirstChild(_G.SelectedToolName)
-					if targetTool then targetTool.Parent = character end
-				end
-				
-				if equippedTool and distance < ATTACK_RANGE then
-					equippedTool:Activate()
-				end
-			end
-		else
-			_G.ClearVisualMarkers()
+	local targetCharacter =
+		getTargetCharacter(
+			targetPlayer
+		)
+
+	if not character
+		or not targetCharacter
+	then
+		clearVisuals()
+		return
+	end
+
+	local _, _, myRoot =
+		getCharacterState(
+			character
+		)
+
+	local _, _, targetRoot =
+		getCharacterState(
+			targetCharacter
+		)
+
+	if not myRoot
+		or not targetRoot
+	then
+		clearVisuals()
+		return
+	end
+
+	targetHighlight.Adornee =
+		targetCharacter
+
+	targetHighlight.Enabled =
+		true
+
+	marker.Position =
+		targetRoot.Position
+		- Vector3.new(
+			0,
+			2.8,
+			0
+		)
+
+	marker.Transparency =
+		0
+
+	playerAttachment.Parent =
+		myRoot
+
+	beam.Enabled =
+		true
+end
+
+-- ==========================================================
+-- PATH CANCEL CHECK
+-- ==========================================================
+
+local function pathCancelled(
+	player,
+	token
+)
+
+	if not running then
+		return true
+	end
+
+	if token ~= currentPathToken then
+		return true
+	end
+
+	if targetPlayer ~= player then
+		return true
+	end
+
+	return false
+end
+
+-- ==========================================================
+-- WORKING PATH LOGIC TRANSPLANTED
+-- ==========================================================
+
+local function walkToSelectedPlayer(
+	selectedPlayer,
+	token
+)
+
+	if pathWorkerRunning then
+		return
+	end
+
+	pathWorkerRunning =
+		true
+
+	while running
+		and not pathCancelled(
+			selectedPlayer,
+			token
+		)
+	do
+
+		local character =
+			getMyCharacter()
+
+		local targetCharacter =
+			getTargetCharacter(
+				selectedPlayer
+			)
+
+		local char,
+			humanoid,
+			hrp =
+			getCharacterState(
+				character
+			)
+
+		local targetChar,
+			targetHumanoid,
+			targetRoot =
+			getCharacterState(
+				targetCharacter
+			)
+
+		if not char
+			or not humanoid
+			or not hrp
+			or not targetChar
+			or not targetHumanoid
+			or not targetRoot
+		then
+
+			setStatus(
+				"Waiting for character"
+			)
+
+			task.wait(0.25)
+
+			continue
 		end
-	else
-		_G.ClearVisualMarkers()
+
+		local distance =
+			(
+				hrp.Position
+				- targetRoot.Position
+			).Magnitude
+
+		if distance <= STOP_DISTANCE then
+
+			humanoid:Move(
+				Vector3.zero,
+				false
+			)
+
+			setStatus(
+				"Reached target"
+			)
+
+			task.wait(0.1)
+
+			continue
+		end
+
+		local targetPosition =
+			targetRoot.Position
+
+		setStatus(
+			"Computing path"
+		)
+
+		-- ==================================================
+		-- EXACT STYLE FROM WORKING SOURCE
+		-- ==================================================
+
+		local path =
+			PathfindingService:CreatePath({
+				AgentRadius =
+					PATH_AGENT_RADIUS,
+
+				AgentHeight =
+					PATH_AGENT_HEIGHT,
+
+				AgentCanJump =
+					true,
+
+				WaypointSpacing =
+					PATH_WAYPOINT_SPACING
+			})
+
+		local success =
+			pcall(function()
+
+				path:ComputeAsync(
+					hrp.Position,
+					targetPosition
+				)
+
+			end)
+
+		if success
+			and path.Status
+				== Enum.PathStatus.Success
+		then
+
+			local lastPosition =
+				hrp.Position
+
+			local stuckTimer =
+				0
+
+			local waypoints =
+				path:GetWaypoints()
+
+			setStatus(
+				"Path: "
+					.. tostring(
+						#waypoints
+					)
+					.. " nodes"
+			)
+
+			local needRepath =
+				false
+
+			-- ==============================================
+			-- WALK THE PATH
+			-- ==============================================
+
+			for i, waypoint in ipairs(
+				waypoints
+			) do
+
+				if i == 1 then
+					continue
+				end
+
+				character =
+					getMyCharacter()
+
+				targetCharacter =
+					getTargetCharacter(
+						selectedPlayer
+					)
+
+				char,
+					humanoid,
+					hrp =
+					getCharacterState(
+						character
+					)
+
+				targetChar,
+					targetHumanoid,
+					targetRoot =
+					getCharacterState(
+						targetCharacter
+					)
+
+				if pathCancelled(
+					selectedPlayer,
+					token
+				)
+					or not hrp
+					or not humanoid
+					or not targetRoot
+				then
+
+					break
+				end
+
+				-- ==========================================
+				-- JUMP WAYPOINT
+				-- ==========================================
+
+				if waypoint.Action
+					== Enum.PathWaypointAction.Jump
+				then
+
+					humanoid.Jump =
+						true
+				end
+
+				local reachedNode =
+					false
+
+				local nodeTimeout =
+					0
+
+				setStatus(
+					"Node "
+						.. tostring(i)
+						.. "/"
+						.. tostring(
+							#waypoints
+						)
+				)
+
+				-- ==========================================
+				-- EXACT WORKING LOOP
+				-- ==========================================
+
+				while not reachedNode
+					and nodeTimeout
+						< NODE_TIMEOUT
+				do
+
+					character =
+						getMyCharacter()
+
+					targetCharacter =
+						getTargetCharacter(
+							selectedPlayer
+						)
+
+					char,
+						humanoid,
+						hrp =
+						getCharacterState(
+							character
+						)
+
+					targetChar,
+						targetHumanoid,
+						targetRoot =
+						getCharacterState(
+							targetCharacter
+						)
+
+					if pathCancelled(
+						selectedPlayer,
+						token
+					)
+						or not hrp
+						or not humanoid
+						or not targetRoot
+					then
+
+						break
+					end
+
+					-- ======================================
+					-- THIS IS THE IMPORTANT PART:
+					-- CURRENT WAYPOINT, NOT TARGET
+					-- ======================================
+
+					local diffVector =
+						waypoint.Position
+						- hrp.Position
+
+					local arrivalDistance
+
+					if i == #waypoints then
+						arrivalDistance =
+							FINAL_NODE_DISTANCE
+					else
+						arrivalDistance =
+							NORMAL_NODE_DISTANCE
+					end
+
+					if diffVector.Magnitude
+						<= arrivalDistance
+					then
+
+						reachedNode =
+							true
+
+						break
+					end
+
+					-- ======================================
+					-- ANTI-STUCK
+					-- ======================================
+
+					stuckTimer =
+						stuckTimer
+						+ 0.015
+
+					if stuckTimer
+						>= STUCK_CHECK_TIME
+					then
+
+						local distanceMoved =
+							(
+								hrp.Position
+								- lastPosition
+							).Magnitude
+
+						if distanceMoved
+							<= STUCK_DISTANCE
+						then
+
+							humanoid.Jump =
+								true
+
+							local flat =
+								Vector3.new(
+									diffVector.X,
+									0,
+									diffVector.Z
+								)
+
+							if flat.Magnitude
+								> 0.001
+							then
+
+								local forwardVector =
+									flat.Unit
+
+								for _ = 1, 20 do
+
+									character =
+										getMyCharacter()
+
+									char,
+										humanoid,
+										hrp =
+										getCharacterState(
+											character
+										)
+
+									if pathCancelled(
+										selectedPlayer,
+										token
+									)
+										or not humanoid
+										or not hrp
+									then
+
+										break
+									end
+
+									humanoid:Move(
+										forwardVector,
+										false
+									)
+
+									RunService.PostSimulation:
+										Wait()
+								end
+							end
+						end
+
+						lastPosition =
+							hrp.Position
+
+						stuckTimer =
+							0
+					end
+
+					-- ======================================
+					-- EXACT SAME MOVEMENT IDEA
+					-- MOVE TOWARD WAYPOINT
+					-- ======================================
+
+					local flatDirection =
+						Vector3.new(
+							diffVector.X,
+							0,
+							diffVector.Z
+						)
+
+					if flatDirection.Magnitude
+						> 0.001
+					then
+
+						humanoid:Move(
+							flatDirection.Unit,
+							false
+						)
+					end
+
+					RunService.PostSimulation:
+						Wait()
+
+					nodeTimeout =
+						nodeTimeout
+						+ 0.015
+				end
+
+				if pathCancelled(
+					selectedPlayer,
+					token
+				) then
+					break
+				end
+
+				-- ==========================================
+				-- CHECK HOW FAR TARGET MOVED
+				-- ==========================================
+
+				targetCharacter =
+					getTargetCharacter(
+						selectedPlayer
+					)
+
+				targetRoot =
+					targetCharacter
+					and targetCharacter:
+						FindFirstChild(
+							"HumanoidRootPart"
+						)
+
+				if targetRoot then
+
+					local movement =
+						(
+							targetRoot.Position
+							- targetPosition
+						).Magnitude
+
+					if movement
+						>= PATH_REPATH_DISTANCE
+					then
+
+						needRepath =
+							true
+
+						break
+					end
+				end
+			end
+
+			if humanoid then
+				humanoid:Move(
+					Vector3.zero,
+					false
+				)
+			end
+
+			if needRepath then
+
+				setStatus(
+					"Target moved - repathing"
+				)
+
+				task.wait(0.05)
+
+			else
+
+				task.wait(0.1)
+			end
+
+		else
+
+			-- ==============================================
+			-- IMPORTANT:
+			-- NO STRAIGHT-LINE FALLBACK
+			-- ==============================================
+
+			humanoid:Move(
+				Vector3.zero,
+				false
+			)
+
+			setStatus(
+				"No path - retrying"
+			)
+
+			task.wait(0.25)
+		end
+	end
+
+	pathWorkerRunning =
+		false
+end
+
+-- ==========================================================
+-- START TRACKING
+-- ==========================================================
+
+local function startTracking(player)
+
+	currentPathToken += 1
+
+	targetPlayer =
+		player
+
+	if not player then
+
+		setStatus("Idle")
+
+		return
+	end
+
+	local token =
+		currentPathToken
+
+	setStatus(
+		"Starting path"
+	)
+
+	task.spawn(
+		walkToSelectedPlayer,
+		player,
+		token
+	)
+end
+
+-- ==========================================================
+-- PLAYER LIST UPDATE
+-- ==========================================================
+
+local function updatePlayerList()
+
+	for _, child in ipairs(
+		playerScroller:GetChildren()
+	) do
+
+		if child:IsA(
+			"TextButton"
+		) then
+
+			child:Destroy()
+		end
+	end
+
+	for _, player in ipairs(
+		Players:GetPlayers()
+	) do
+
+		if player ~= localPlayer then
+
+			local button =
+				Instance.new(
+					"TextButton"
+				)
+
+			button.Size =
+				UDim2.new(
+					1,
+					-6,
+					0,
+					30
+				)
+
+			button.Text =
+				player.Name
+
+			button.Font =
+				Enum.Font.SourceSans
+
+			button.TextSize =
+				14
+
+			button.TextColor3 =
+				Color3.fromRGB(
+					255,
+					255,
+					255
+				)
+
+			button.BorderSizePixel =
+				0
+
+			if targetPlayer
+				== player
+			then
+
+				button.BackgroundColor3 =
+					Color3.fromRGB(
+						0,
+						145,
+						80
+					)
+
+			else
+
+				button.BackgroundColor3 =
+					Color3.fromRGB(
+						58,
+						58,
+						64
+					)
+			end
+
+			button.Parent =
+				playerScroller
+
+			button.MouseButton1Click:
+				Connect(function()
+
+					if targetPlayer
+						== player
+					then
+
+						currentPathToken +=
+							1
+
+						targetPlayer =
+							nil
+
+						local character =
+							getMyCharacter()
+
+						local _,
+							humanoid =
+							getCharacterState(
+								character
+							)
+
+						if humanoid then
+
+							humanoid:Move(
+								Vector3.zero,
+								false
+							)
+						end
+
+						setStatus(
+							"Idle"
+						)
+
+					else
+
+						startTracking(
+							player
+						)
+					end
+
+					updatePlayerList()
+				end)
+		end
+	end
+
+	task.defer(function()
+
+		playerScroller.CanvasSize =
+			UDim2.new(
+				0,
+				0,
+				0,
+				playerLayout.AbsoluteContentSize.Y
+				+ 5
+			)
+	end)
+end
+
+-- ==========================================================
+-- TOOL LIST UPDATE
+-- ==========================================================
+
+local function updateToolList()
+
+	for _, child in ipairs(
+		toolScroller:GetChildren()
+	) do
+
+		if child:IsA(
+			"TextButton"
+		) then
+
+			child:Destroy()
+		end
+	end
+
+	local shown =
+		{}
+
+	local function scan(container)
+
+		if not container then
+			return
+		end
+
+		for _, object in ipairs(
+			container:GetChildren()
+		) do
+
+			if object:IsA("Tool")
+				and not shown[
+					object.Name
+				]
+			then
+
+				shown[
+					object.Name
+				] = true
+
+				local button =
+					Instance.new(
+						"TextButton"
+					)
+
+				button.Size =
+					UDim2.new(
+						1,
+						-6,
+						0,
+						30
+					)
+
+				button.Text =
+					object.Name
+
+				button.Font =
+					Enum.Font.SourceSans
+
+				button.TextSize =
+					14
+
+				button.TextColor3 =
+					Color3.fromRGB(
+						255,
+						255,
+						255
+					)
+
+				button.BorderSizePixel =
+					0
+
+				if selectedToolName
+					== object.Name
+				then
+
+					button.BackgroundColor3 =
+						Color3.fromRGB(
+							0,
+							110,
+							180
+						)
+
+				else
+
+					button.BackgroundColor3 =
+						Color3.fromRGB(
+							58,
+							58,
+							64
+						)
+				end
+
+				button.Parent =
+					toolScroller
+
+				button.MouseButton1Click:
+					Connect(function()
+
+						if selectedToolName
+							== object.Name
+						then
+
+							selectedToolName =
+								nil
+
+						else
+
+							selectedToolName =
+								object.Name
+						end
+
+						updateToolList()
+					end)
+			end
+		end
+	end
+
+	scan(
+		localPlayer:FindFirstChild(
+			"Backpack"
+		)
+	)
+
+	scan(
+		getMyCharacter()
+	)
+
+	task.defer(function()
+
+		toolScroller.CanvasSize =
+			UDim2.new(
+				0,
+				0,
+				0,
+				toolLayout.AbsoluteContentSize.Y
+				+ 5
+			)
+	end)
+end
+
+-- ==========================================================
+-- WEAPON SYSTEM
+-- ==========================================================
+
+local lastAttack =
+	0
+
+local function updateWeapon()
+
+	if not running
+		or not targetPlayer
+		or not selectedToolName
+	then
+		return
+	end
+
+	local character =
+		getMyCharacter()
+
+	local targetCharacter =
+		getTargetCharacter(
+			targetPlayer
+		)
+
+	local _,
+		humanoid,
+		root =
+		getCharacterState(
+			character
+		)
+
+	local _,
+		targetHumanoid,
+		targetRoot =
+		getCharacterState(
+			targetCharacter
+		)
+
+	if not humanoid
+		or not root
+		or not targetHumanoid
+		or not targetRoot
+	then
+		return
+	end
+
+	local tool =
+		character:FindFirstChild(
+			selectedToolName
+		)
+
+	if not tool then
+
+		local backpack =
+			localPlayer:
+				FindFirstChild(
+					"Backpack"
+				)
+
+		tool =
+			backpack
+			and backpack:
+				FindFirstChild(
+					selectedToolName
+				)
+
+		if tool then
+
+			tool.Parent =
+				character
+		end
+	end
+
+	if not tool
+		or not tool:IsA(
+			"Tool"
+		)
+	then
+		return
+	end
+
+	local distance =
+		(
+			root.Position
+			- targetRoot.Position
+		).Magnitude
+
+	if distance <= ATTACK_RANGE then
+
+		local now =
+			os.clock()
+
+		if now - lastAttack
+			>= 0.25
+		then
+
+			lastAttack =
+				now
+
+			pcall(function()
+				tool:Activate()
+			end)
+		end
 	end
 end
 
-_G.LoopConnection = RunService.RenderStepped:Connect(autoRunLoop)
+-- ==========================================================
+-- STOP TRACKING
+-- ==========================================================
 
-if _G.KillButton then
-	_G.KillButton.MouseButton1Click:Connect(function()
-		_G.IsScriptRunning = false
-		if _G.LoopConnection then _G.LoopConnection:Disconnect() end
-		if _G.InputConnection then _G.InputConnection:Disconnect() end
-		_G.ClearVisualMarkers()
-		targetHighlight:Destroy()
-		targetBox:Destroy()
-		playerOriginAttachment:Destroy()
-		pathBeam:Destroy()
-		local gui = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
-		if gui then gui:Destroy() end
-		print("Auto-Tracker terminated.")
-	end)
+local function stopTracking()
+
+	currentPathToken +=
+		1
+
+	targetPlayer =
+		nil
+
+	selectedToolName =
+		nil
+
+	clearVisuals()
+
+	local character =
+		getMyCharacter()
+
+	local _,
+		humanoid =
+		getCharacterState(
+			character
+		)
+
+	if humanoid then
+
+		humanoid:Move(
+			Vector3.zero,
+			false
+		)
+	end
+
+	if character then
+
+		local equipped =
+			character:
+				FindFirstChildOfClass(
+					"Tool"
+				)
+
+		local backpack =
+			localPlayer:
+				FindFirstChild(
+					"Backpack"
+				)
+
+		if equipped
+			and backpack
+		then
+
+			equipped.Parent =
+				backpack
+		end
+	end
+
+	setStatus(
+		"Stopped"
+	)
+
+	updatePlayerList()
+	updateToolList()
 end
+
+stopButton.MouseButton1Click:
+	Connect(
+		stopTracking
+	)
+
+-- ==========================================================
+-- VISUAL LOOP
+-- ==========================================================
+
+trackConnection(
+	RunService.RenderStepped:
+		Connect(function()
+
+			if running then
+				updateVisuals()
+			end
+		end)
+)
+
+-- ==========================================================
+-- ATTACK LOOP
+-- ==========================================================
+
+trackConnection(
+	RunService.Heartbeat:
+		Connect(function()
+
+			if running then
+				updateWeapon()
+			end
+		end)
+)
+
+-- ==========================================================
+-- X KEY
+-- ==========================================================
+
+trackConnection(
+	UserInputService.InputBegan:
+		Connect(
+			function(
+				input,
+				processed
+			)
+
+				if processed then
+					return
+				end
+
+				if input.KeyCode
+					== Enum.KeyCode.X
+				then
+
+					stopTracking()
+				end
+			end
+		)
+)
+
+-- ==========================================================
+-- PLAYER EVENTS
+-- ==========================================================
+
+trackConnection(
+	Players.PlayerAdded:
+		Connect(function()
+
+			updatePlayerList()
+		end)
+)
+
+trackConnection(
+	Players.PlayerRemoving:
+		Connect(function(player)
+
+			if targetPlayer
+				== player
+			then
+
+				currentPathToken +=
+					1
+
+				targetPlayer =
+					nil
+
+				clearVisuals()
+
+				setStatus(
+					"Target left"
+				)
+			end
+
+			updatePlayerList()
+		end)
+)
+
+-- ==========================================================
+-- BACKPACK EVENTS
+-- ==========================================================
+
+local backpack =
+	localPlayer:
+		WaitForChild(
+			"Backpack"
+		)
+
+trackConnection(
+	backpack.ChildAdded:
+		Connect(function()
+
+			task.defer(
+				updateToolList
+			)
+		end)
+)
+
+trackConnection(
+	backpack.ChildRemoved:
+		Connect(function()
+
+			task.defer(
+				updateToolList
+			)
+		end)
+)
+
+-- ==========================================================
+-- CLEANUP
+-- ==========================================================
+
+local function cleanup()
+
+	if not running then
+		return
+	end
+
+	running =
+		false
+
+	currentPathToken +=
+		1
+
+	targetPlayer =
+		nil
+
+	selectedToolName =
+		nil
+
+	local character =
+		getMyCharacter()
+
+	local _,
+		humanoid =
+		getCharacterState(
+			character
+		)
+
+	if humanoid then
+
+		humanoid:Move(
+			Vector3.zero,
+			false
+		)
+	end
+
+	for _, connection in ipairs(
+		connections
+	) do
+
+		pcall(function()
+			connection:
+				Disconnect()
+		end)
+	end
+
+	table.clear(
+		connections
+	)
+
+	clearVisuals()
+
+	if visualFolder then
+		visualFolder:
+			Destroy()
+	end
+
+	if screenGui then
+		screenGui:
+			Destroy()
+	end
+
+	_G.PlayerTrackerCleanup =
+		nil
+
+	print(
+		"Player Tracker terminated."
+	)
+end
+
+_G.PlayerTrackerCleanup =
+	cleanup
+
+killButton.MouseButton1Click:
+	Connect(
+		cleanup
+	)
+
+-- ==========================================================
+-- INITIALIZE
+-- ==========================================================
+
+updatePlayerList()
+updateToolList()
+
+setStatus(
+	"Idle"
+)
+
+print("====================================")
+print("Player Tracker loaded.")
+print("Path logic copied from working walkToTarget style.")
+print("Movement follows Roblox-generated waypoint positions.")
+print("Beam is visual only.")
+print("Press X to stop.")
+print("====================================")
