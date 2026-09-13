@@ -1,12 +1,13 @@
 -- ==========================================================
 -- AUTO PLAYER TRACKER
--- BUILT AROUND THE WORKING walkToTarget() PATH LOGIC
+-- PATHFINDING + GUI ARRIVAL KEY SETTINGS
 -- ==========================================================
 
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local localPlayer = Players.LocalPlayer
 
@@ -38,6 +39,84 @@ local STUCK_CHECK_TIME = 0.8
 local STUCK_DISTANCE = 1.2
 
 -- ==========================================================
+-- ARRIVAL KEY OPTIONS
+-- ==========================================================
+
+local keyOptions = {
+	{
+		Name = "E",
+		Key = Enum.KeyCode.E
+	},
+
+	{
+		Name = "F",
+		Key = Enum.KeyCode.F
+	},
+
+	{
+		Name = "Q",
+		Key = Enum.KeyCode.Q
+	},
+
+	{
+		Name = "R",
+		Key = Enum.KeyCode.R
+	},
+
+	{
+		Name = "T",
+		Key = Enum.KeyCode.T
+	},
+
+	{
+		Name = "G",
+		Key = Enum.KeyCode.G
+	},
+
+	{
+		Name = "Space",
+		Key = Enum.KeyCode.Space
+	}
+}
+
+local durationOptions = {
+	{
+		Name = "1s",
+		Value = 1
+	},
+
+	{
+		Name = "2s",
+		Value = 2
+	},
+
+	{
+		Name = "3s",
+		Value = 3
+	},
+
+	{
+		Name = "5s",
+		Value = 5
+	},
+
+	{
+		Name = "10s",
+		Value = 10
+	},
+
+	{
+		Name = "Forever",
+		Value = math.huge
+	}
+}
+
+local currentKeyIndex = 1
+local currentDurationIndex = 3
+
+local HOLD_KEY_ENABLED = true
+
+-- ==========================================================
 -- CLEAN PREVIOUS RUN
 -- ==========================================================
 
@@ -59,6 +138,9 @@ local pathWorkerRunning = false
 
 local connections = {}
 
+local holdingArrivalKey = false
+local arrivalKeyToken = 0
+
 -- ==========================================================
 -- CONNECTION HELPER
 -- ==========================================================
@@ -69,20 +151,120 @@ local function trackConnection(connection)
 end
 
 -- ==========================================================
+-- CURRENT KEY SETTINGS
+-- ==========================================================
+
+local function getHoldKey()
+	return keyOptions[currentKeyIndex].Key
+end
+
+local function getHoldKeyName()
+	return keyOptions[currentKeyIndex].Name
+end
+
+local function getHoldDuration()
+	return durationOptions[currentDurationIndex].Value
+end
+
+local function getHoldDurationName()
+	return durationOptions[currentDurationIndex].Name
+end
+
+-- ==========================================================
+-- ARRIVAL KEY
+-- ==========================================================
+
+local function releaseArrivalKey()
+
+	if not holdingArrivalKey then
+		return
+	end
+
+	holdingArrivalKey = false
+
+	local key = getHoldKey()
+
+	pcall(function()
+
+		VirtualInputManager:SendKeyEvent(
+			false,
+			key,
+			false,
+			game
+		)
+
+	end)
+end
+
+local function holdArrivalKey()
+
+	if not HOLD_KEY_ENABLED then
+		return
+	end
+
+	arrivalKeyToken += 1
+
+	local token = arrivalKeyToken
+
+	releaseArrivalKey()
+
+	local key = getHoldKey()
+	local duration = getHoldDuration()
+
+	holdingArrivalKey = true
+
+	pcall(function()
+
+		VirtualInputManager:SendKeyEvent(
+			true,
+			key,
+			false,
+			game
+		)
+
+	end)
+
+	if duration ~= math.huge then
+
+		task.spawn(function()
+
+			local started = os.clock()
+
+			while running
+				and holdingArrivalKey
+				and arrivalKeyToken == token
+				and os.clock() - started < duration
+			do
+
+				task.wait(0.05)
+			end
+
+			if arrivalKeyToken == token then
+				releaseArrivalKey()
+			end
+
+		end)
+	end
+end
+
+-- ==========================================================
 -- CHARACTER HELPERS
 -- ==========================================================
 
 local function getMyCharacter()
+
 	local folder = workspace:FindFirstChild("Characters")
 
 	if folder then
+
 		local named = folder:FindFirstChild(localPlayer.Name)
 
 		if named then
 			return named
 		end
 
-		local special = folder:FindFirstChild("AreWeAloneOnEarth")
+		local special =
+			folder:FindFirstChild("AreWeAloneOnEarth")
 
 		if special then
 			return special
@@ -93,6 +275,7 @@ local function getMyCharacter()
 end
 
 local function getTargetCharacter(player)
+
 	if not player then
 		return nil
 	end
@@ -100,6 +283,7 @@ local function getTargetCharacter(player)
 	local folder = workspace:FindFirstChild("Characters")
 
 	if folder then
+
 		local custom = folder:FindFirstChild(player.Name)
 
 		if custom then
@@ -111,6 +295,7 @@ local function getTargetCharacter(player)
 end
 
 local function getCharacterState(character)
+
 	if not character then
 		return nil, nil, nil
 	end
@@ -125,29 +310,15 @@ local function getCharacterState(character)
 		and root
 		and humanoid.Health > 0
 	then
+
 		return character, humanoid, root
 	end
 
 	return nil, nil, nil
 end
 
-local function getTargetPosition(character)
-	if not character then
-		return nil
-	end
-
-	local root =
-		character:FindFirstChild("HumanoidRootPart")
-
-	if root then
-		return root.Position
-	end
-
-	return nil
-end
-
 -- ==========================================================
--- GUI CLEANUP
+-- CLEAN OLD GUI
 -- ==========================================================
 
 local oldGui =
@@ -168,27 +339,20 @@ end
 -- GUI
 -- ==========================================================
 
-local screenGui =
-	Instance.new("ScreenGui")
+local screenGui = Instance.new("ScreenGui")
 
-screenGui.Name =
-	"PlayerPathTrackerGui"
+screenGui.Name = "PlayerPathTrackerGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
 
-screenGui.ResetOnSpawn =
-	false
-
-screenGui.Parent =
-	playerGui
-
-local mainFrame =
-	Instance.new("Frame")
+local mainFrame = Instance.new("Frame")
 
 mainFrame.Size =
 	UDim2.new(
 		0,
 		230,
 		0,
-		500
+		580
 	)
 
 mainFrame.Position =
@@ -196,7 +360,7 @@ mainFrame.Position =
 		0,
 		20,
 		0.5,
-		-250
+		-290
 	)
 
 mainFrame.BackgroundColor3 =
@@ -206,24 +370,16 @@ mainFrame.BackgroundColor3 =
 		38
 	)
 
-mainFrame.BorderSizePixel =
-	0
-
-mainFrame.Active =
-	true
-
-mainFrame.Draggable =
-	true
-
-mainFrame.Parent =
-	screenGui
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
 
 -- ==========================================================
 -- TITLE
 -- ==========================================================
 
-local title =
-	Instance.new("TextLabel")
+local title = Instance.new("TextLabel")
 
 title.Size =
 	UDim2.new(
@@ -240,11 +396,8 @@ title.BackgroundColor3 =
 		27
 	)
 
-title.BorderSizePixel =
-	0
-
-title.Text =
-	"PLAYER PATH TRACKER"
+title.BorderSizePixel = 0
+title.Text = "PLAYER PATH TRACKER"
 
 title.TextColor3 =
 	Color3.fromRGB(
@@ -253,21 +406,15 @@ title.TextColor3 =
 		255
 	)
 
-title.Font =
-	Enum.Font.SourceSansBold
-
-title.TextSize =
-	15
-
-title.Parent =
-	mainFrame
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 15
+title.Parent = mainFrame
 
 -- ==========================================================
 -- STATUS
 -- ==========================================================
 
-local statusLabel =
-	Instance.new("TextLabel")
+local statusLabel = Instance.new("TextLabel")
 
 statusLabel.Size =
 	UDim2.new(
@@ -292,11 +439,8 @@ statusLabel.BackgroundColor3 =
 		48
 	)
 
-statusLabel.BorderSizePixel =
-	0
-
-statusLabel.Text =
-	"Status: Idle"
+statusLabel.BorderSizePixel = 0
+statusLabel.Text = "Status: Idle"
 
 statusLabel.TextColor3 =
 	Color3.fromRGB(
@@ -305,19 +449,16 @@ statusLabel.TextColor3 =
 		210
 	)
 
-statusLabel.Font =
-	Enum.Font.SourceSans
-
-statusLabel.TextSize =
-	13
-
-statusLabel.Parent =
-	mainFrame
+statusLabel.Font = Enum.Font.SourceSans
+statusLabel.TextSize = 13
+statusLabel.Parent = mainFrame
 
 local function setStatus(text)
+
 	if statusLabel
 		and statusLabel.Parent
 	then
+
 		statusLabel.Text =
 			"Status: " .. text
 	end
@@ -327,8 +468,7 @@ end
 -- PLAYER HEADER
 -- ==========================================================
 
-local playerHeader =
-	Instance.new("TextLabel")
+local playerHeader = Instance.new("TextLabel")
 
 playerHeader.Size =
 	UDim2.new(
@@ -353,11 +493,8 @@ playerHeader.BackgroundColor3 =
 		28
 	)
 
-playerHeader.BorderSizePixel =
-	0
-
-playerHeader.Text =
-	"TARGET PLAYER"
+playerHeader.BorderSizePixel = 0
+playerHeader.Text = "TARGET PLAYER"
 
 playerHeader.TextColor3 =
 	Color3.fromRGB(
@@ -366,28 +503,22 @@ playerHeader.TextColor3 =
 		255
 	)
 
-playerHeader.Font =
-	Enum.Font.SourceSansBold
-
-playerHeader.TextSize =
-	13
-
-playerHeader.Parent =
-	mainFrame
+playerHeader.Font = Enum.Font.SourceSansBold
+playerHeader.TextSize = 13
+playerHeader.Parent = mainFrame
 
 -- ==========================================================
 -- PLAYER LIST
 -- ==========================================================
 
-local playerScroller =
-	Instance.new("ScrollingFrame")
+local playerScroller = Instance.new("ScrollingFrame")
 
 playerScroller.Size =
 	UDim2.new(
 		1,
 		-10,
 		0,
-		135
+		120
 	)
 
 playerScroller.Position =
@@ -405,20 +536,12 @@ playerScroller.BackgroundColor3 =
 		44
 	)
 
-playerScroller.BorderSizePixel =
-	0
+playerScroller.BorderSizePixel = 0
+playerScroller.ScrollBarThickness = 5
+playerScroller.CanvasSize = UDim2.new()
+playerScroller.Parent = mainFrame
 
-playerScroller.ScrollBarThickness =
-	5
-
-playerScroller.CanvasSize =
-	UDim2.new()
-
-playerScroller.Parent =
-	mainFrame
-
-local playerLayout =
-	Instance.new("UIListLayout")
+local playerLayout = Instance.new("UIListLayout")
 
 playerLayout.Padding =
 	UDim.new(
@@ -426,15 +549,13 @@ playerLayout.Padding =
 		3
 	)
 
-playerLayout.Parent =
-	playerScroller
+playerLayout.Parent = playerScroller
 
 -- ==========================================================
 -- TOOL HEADER
 -- ==========================================================
 
-local toolHeader =
-	Instance.new("TextLabel")
+local toolHeader = Instance.new("TextLabel")
 
 toolHeader.Size =
 	UDim2.new(
@@ -449,7 +570,7 @@ toolHeader.Position =
 		0,
 		5,
 		0,
-		238
+		223
 	)
 
 toolHeader.BackgroundColor3 =
@@ -459,11 +580,8 @@ toolHeader.BackgroundColor3 =
 		28
 	)
 
-toolHeader.BorderSizePixel =
-	0
-
-toolHeader.Text =
-	"SELECT WEAPON"
+toolHeader.BorderSizePixel = 0
+toolHeader.Text = "SELECT WEAPON"
 
 toolHeader.TextColor3 =
 	Color3.fromRGB(
@@ -472,28 +590,22 @@ toolHeader.TextColor3 =
 		255
 	)
 
-toolHeader.Font =
-	Enum.Font.SourceSansBold
-
-toolHeader.TextSize =
-	13
-
-toolHeader.Parent =
-	mainFrame
+toolHeader.Font = Enum.Font.SourceSansBold
+toolHeader.TextSize = 13
+toolHeader.Parent = mainFrame
 
 -- ==========================================================
 -- TOOL LIST
 -- ==========================================================
 
-local toolScroller =
-	Instance.new("ScrollingFrame")
+local toolScroller = Instance.new("ScrollingFrame")
 
 toolScroller.Size =
 	UDim2.new(
 		1,
 		-10,
 		0,
-		135
+		110
 	)
 
 toolScroller.Position =
@@ -501,7 +613,7 @@ toolScroller.Position =
 		0,
 		5,
 		0,
-		265
+		250
 	)
 
 toolScroller.BackgroundColor3 =
@@ -511,20 +623,12 @@ toolScroller.BackgroundColor3 =
 		44
 	)
 
-toolScroller.BorderSizePixel =
-	0
+toolScroller.BorderSizePixel = 0
+toolScroller.ScrollBarThickness = 5
+toolScroller.CanvasSize = UDim2.new()
+toolScroller.Parent = mainFrame
 
-toolScroller.ScrollBarThickness =
-	5
-
-toolScroller.CanvasSize =
-	UDim2.new()
-
-toolScroller.Parent =
-	mainFrame
-
-local toolLayout =
-	Instance.new("UIListLayout")
+local toolLayout = Instance.new("UIListLayout")
 
 toolLayout.Padding =
 	UDim.new(
@@ -532,15 +636,269 @@ toolLayout.Padding =
 		3
 	)
 
-toolLayout.Parent =
-	toolScroller
+toolLayout.Parent = toolScroller
+
+-- ==========================================================
+-- ARRIVAL SETTINGS HEADER
+-- ==========================================================
+
+local arrivalHeader = Instance.new("TextLabel")
+
+arrivalHeader.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		25
+	)
+
+arrivalHeader.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		366
+	)
+
+arrivalHeader.BackgroundColor3 =
+	Color3.fromRGB(
+		25,
+		25,
+		28
+	)
+
+arrivalHeader.BorderSizePixel = 0
+arrivalHeader.Text = "ARRIVAL ACTION"
+
+arrivalHeader.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+arrivalHeader.Font = Enum.Font.SourceSansBold
+arrivalHeader.TextSize = 13
+arrivalHeader.Parent = mainFrame
+
+-- ==========================================================
+-- KEY BUTTON
+-- ==========================================================
+
+local keyButton = Instance.new("TextButton")
+
+keyButton.Size =
+	UDim2.new(
+		0.5,
+		-8,
+		0,
+		35
+	)
+
+keyButton.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		396
+	)
+
+keyButton.BackgroundColor3 =
+	Color3.fromRGB(
+		55,
+		75,
+		120
+	)
+
+keyButton.BorderSizePixel = 0
+
+keyButton.Text =
+	"Key: "
+	.. getHoldKeyName()
+
+keyButton.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+keyButton.Font =
+	Enum.Font.SourceSansBold
+
+keyButton.TextSize = 13
+keyButton.Parent = mainFrame
+
+keyButton.MouseButton1Click:Connect(function()
+
+	arrivalKeyToken += 1
+
+	releaseArrivalKey()
+
+	currentKeyIndex += 1
+
+	if currentKeyIndex > #keyOptions then
+		currentKeyIndex = 1
+	end
+
+	keyButton.Text =
+		"Key: "
+		.. getHoldKeyName()
+
+end)
+
+-- ==========================================================
+-- DURATION BUTTON
+-- ==========================================================
+
+local durationButton = Instance.new("TextButton")
+
+durationButton.Size =
+	UDim2.new(
+		0.5,
+		-8,
+		0,
+		35
+	)
+
+durationButton.Position =
+	UDim2.new(
+		0.5,
+		3,
+		0,
+		396
+	)
+
+durationButton.BackgroundColor3 =
+	Color3.fromRGB(
+		80,
+		65,
+		115
+	)
+
+durationButton.BorderSizePixel = 0
+
+durationButton.Text =
+	"Hold: "
+	.. getHoldDurationName()
+
+durationButton.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+durationButton.Font =
+	Enum.Font.SourceSansBold
+
+durationButton.TextSize = 13
+durationButton.Parent = mainFrame
+
+durationButton.MouseButton1Click:Connect(function()
+
+	arrivalKeyToken += 1
+
+	releaseArrivalKey()
+
+	currentDurationIndex += 1
+
+	if currentDurationIndex > #durationOptions then
+		currentDurationIndex = 1
+	end
+
+	durationButton.Text =
+		"Hold: "
+		.. getHoldDurationName()
+
+end)
+
+-- ==========================================================
+-- ENABLE/DISABLE ARRIVAL ACTION
+-- ==========================================================
+
+local arrivalToggle = Instance.new("TextButton")
+
+arrivalToggle.Size =
+	UDim2.new(
+		1,
+		-10,
+		0,
+		30
+	)
+
+arrivalToggle.Position =
+	UDim2.new(
+		0,
+		5,
+		0,
+		436
+	)
+
+arrivalToggle.BackgroundColor3 =
+	Color3.fromRGB(
+		0,
+		130,
+		85
+	)
+
+arrivalToggle.BorderSizePixel = 0
+arrivalToggle.Text = "Hold Key On Arrival: ON"
+
+arrivalToggle.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+arrivalToggle.Font =
+	Enum.Font.SourceSansBold
+
+arrivalToggle.TextSize = 13
+arrivalToggle.Parent = mainFrame
+
+arrivalToggle.MouseButton1Click:Connect(function()
+
+	HOLD_KEY_ENABLED =
+		not HOLD_KEY_ENABLED
+
+	if HOLD_KEY_ENABLED then
+
+		arrivalToggle.Text =
+			"Hold Key On Arrival: ON"
+
+		arrivalToggle.BackgroundColor3 =
+			Color3.fromRGB(
+				0,
+				130,
+				85
+			)
+
+	else
+
+		arrivalToggle.Text =
+			"Hold Key On Arrival: OFF"
+
+		arrivalToggle.BackgroundColor3 =
+			Color3.fromRGB(
+				90,
+				90,
+				90
+			)
+
+		arrivalKeyToken += 1
+
+		releaseArrivalKey()
+	end
+
+end)
 
 -- ==========================================================
 -- STOP BUTTON
 -- ==========================================================
 
-local stopButton =
-	Instance.new("TextButton")
+local stopButton = Instance.new("TextButton")
 
 stopButton.Size =
 	UDim2.new(
@@ -555,7 +913,7 @@ stopButton.Position =
 		0,
 		5,
 		0,
-		410
+		474
 	)
 
 stopButton.BackgroundColor3 =
@@ -565,11 +923,8 @@ stopButton.BackgroundColor3 =
 		15
 	)
 
-stopButton.BorderSizePixel =
-	0
-
-stopButton.Text =
-	"STOP TRACKING [X]"
+stopButton.BorderSizePixel = 0
+stopButton.Text = "STOP TRACKING [X]"
 
 stopButton.TextColor3 =
 	Color3.fromRGB(
@@ -581,18 +936,14 @@ stopButton.TextColor3 =
 stopButton.Font =
 	Enum.Font.SourceSansBold
 
-stopButton.TextSize =
-	14
-
-stopButton.Parent =
-	mainFrame
+stopButton.TextSize = 14
+stopButton.Parent = mainFrame
 
 -- ==========================================================
 -- KILL BUTTON
 -- ==========================================================
 
-local killButton =
-	Instance.new("TextButton")
+local killButton = Instance.new("TextButton")
 
 killButton.Size =
 	UDim2.new(
@@ -607,7 +958,7 @@ killButton.Position =
 		0,
 		5,
 		0,
-		452
+		514
 	)
 
 killButton.BackgroundColor3 =
@@ -617,11 +968,8 @@ killButton.BackgroundColor3 =
 		45
 	)
 
-killButton.BorderSizePixel =
-	0
-
-killButton.Text =
-	"KILL SCRIPT"
+killButton.BorderSizePixel = 0
+killButton.Text = "KILL SCRIPT"
 
 killButton.TextColor3 =
 	Color3.fromRGB(
@@ -633,24 +981,19 @@ killButton.TextColor3 =
 killButton.Font =
 	Enum.Font.SourceSansBold
 
-killButton.TextSize =
-	14
-
-killButton.Parent =
-	mainFrame
+killButton.TextSize = 14
+killButton.Parent = mainFrame
 
 -- ==========================================================
 -- VISUAL FOLDER
 -- ==========================================================
 
-local visualFolder =
-	Instance.new("Folder")
+local visualFolder = Instance.new("Folder")
 
 visualFolder.Name =
 	"PlayerTrackerVisuals"
 
-visualFolder.Parent =
-	workspace
+visualFolder.Parent = workspace
 
 -- ==========================================================
 -- TARGET HIGHLIGHT
@@ -669,8 +1012,7 @@ targetHighlight.FillColor =
 		80
 	)
 
-targetHighlight.FillTransparency =
-	0.7
+targetHighlight.FillTransparency = 0.7
 
 targetHighlight.OutlineColor =
 	Color3.fromRGB(
@@ -679,21 +1021,15 @@ targetHighlight.OutlineColor =
 		80
 	)
 
-targetHighlight.OutlineTransparency =
-	0
-
-targetHighlight.Enabled =
-	false
-
-targetHighlight.Parent =
-	visualFolder
+targetHighlight.OutlineTransparency = 0
+targetHighlight.Enabled = false
+targetHighlight.Parent = visualFolder
 
 -- ==========================================================
 -- TARGET MARKER
 -- ==========================================================
 
-local marker =
-	Instance.new("Part")
+local marker = Instance.new("Part")
 
 marker.Name =
 	"PlayerTargetMarker"
@@ -705,20 +1041,11 @@ marker.Size =
 		2.5
 	)
 
-marker.Anchored =
-	true
-
-marker.CanCollide =
-	false
-
-marker.CanTouch =
-	false
-
-marker.CanQuery =
-	false
-
-marker.CastShadow =
-	false
+marker.Anchored = true
+marker.CanCollide = false
+marker.CanTouch = false
+marker.CanQuery = false
+marker.CastShadow = false
 
 marker.Material =
 	Enum.Material.Neon
@@ -730,11 +1057,8 @@ marker.Color =
 		80
 	)
 
-marker.Transparency =
-	1
-
-marker.Parent =
-	visualFolder
+marker.Transparency = 1
+marker.Parent = visualFolder
 
 -- ==========================================================
 -- BEAM
@@ -755,8 +1079,7 @@ targetAttachment.Name =
 targetAttachment.Parent =
 	marker
 
-local beam =
-	Instance.new("Beam")
+local beam = Instance.new("Beam")
 
 beam.Name =
 	"PlayerTrackerBeam"
@@ -767,20 +1090,11 @@ beam.Attachment0 =
 beam.Attachment1 =
 	targetAttachment
 
-beam.Width0 =
-	0.35
-
-beam.Width1 =
-	0.35
-
-beam.FaceCamera =
-	true
-
-beam.LightEmission =
-	1
-
-beam.LightInfluence =
-	0
+beam.Width0 = 0.35
+beam.Width1 = 0.35
+beam.FaceCamera = true
+beam.LightEmission = 1
+beam.LightInfluence = 0
 
 beam.Color =
 	ColorSequence.new(
@@ -791,11 +1105,8 @@ beam.Color =
 		)
 	)
 
-beam.Enabled =
-	false
-
-beam.Parent =
-	visualFolder
+beam.Enabled = false
+beam.Parent = visualFolder
 
 -- ==========================================================
 -- VISUAL CONTROL
@@ -803,20 +1114,14 @@ beam.Parent =
 
 local function clearVisuals()
 
-	targetHighlight.Enabled =
-		false
+	targetHighlight.Enabled = false
+	targetHighlight.Adornee = nil
 
-	targetHighlight.Adornee =
-		nil
+	marker.Transparency = 1
 
-	marker.Transparency =
-		1
+	beam.Enabled = false
 
-	beam.Enabled =
-		false
-
-	playerAttachment.Parent =
-		nil
+	playerAttachment.Parent = nil
 end
 
 local function updateVisuals()
@@ -824,6 +1129,7 @@ local function updateVisuals()
 	if not running
 		or not targetPlayer
 	then
+
 		clearVisuals()
 		return
 	end
@@ -839,6 +1145,7 @@ local function updateVisuals()
 	if not character
 		or not targetCharacter
 	then
+
 		clearVisuals()
 		return
 	end
@@ -856,6 +1163,7 @@ local function updateVisuals()
 	if not myRoot
 		or not targetRoot
 	then
+
 		clearVisuals()
 		return
 	end
@@ -863,8 +1171,7 @@ local function updateVisuals()
 	targetHighlight.Adornee =
 		targetCharacter
 
-	targetHighlight.Enabled =
-		true
+	targetHighlight.Enabled = true
 
 	marker.Position =
 		targetRoot.Position
@@ -874,24 +1181,19 @@ local function updateVisuals()
 			0
 		)
 
-	marker.Transparency =
-		0
+	marker.Transparency = 0
 
 	playerAttachment.Parent =
 		myRoot
 
-	beam.Enabled =
-		true
+	beam.Enabled = true
 end
 
 -- ==========================================================
--- PATH CANCEL CHECK
+-- PATH CANCEL
 -- ==========================================================
 
-local function pathCancelled(
-	player,
-	token
-)
+local function pathCancelled(player, token)
 
 	if not running then
 		return true
@@ -909,7 +1211,7 @@ local function pathCancelled(
 end
 
 -- ==========================================================
--- WORKING PATH LOGIC TRANSPLANTED
+-- PATHFINDING
 -- ==========================================================
 
 local function walkToSelectedPlayer(
@@ -921,8 +1223,7 @@ local function walkToSelectedPlayer(
 		return
 	end
 
-	pathWorkerRunning =
-		true
+	pathWorkerRunning = true
 
 	while running
 		and not pathCancelled(
@@ -976,6 +1277,10 @@ local function walkToSelectedPlayer(
 				- targetRoot.Position
 			).Magnitude
 
+		-- ==================================================
+		-- ARRIVAL
+		-- ==================================================
+
 		if distance <= STOP_DISTANCE then
 
 			humanoid:Move(
@@ -987,9 +1292,25 @@ local function walkToSelectedPlayer(
 				"Reached target"
 			)
 
+			if HOLD_KEY_ENABLED
+				and not holdingArrivalKey
+			then
+
+				holdArrivalKey()
+			end
+
 			task.wait(0.1)
 
 			continue
+
+		else
+
+			if holdingArrivalKey then
+
+				arrivalKeyToken += 1
+
+				releaseArrivalKey()
+			end
 		end
 
 		local targetPosition =
@@ -998,10 +1319,6 @@ local function walkToSelectedPlayer(
 		setStatus(
 			"Computing path"
 		)
-
-		-- ==================================================
-		-- EXACT STYLE FROM WORKING SOURCE
-		-- ==================================================
 
 		local path =
 			PathfindingService:CreatePath({
@@ -1053,10 +1370,6 @@ local function walkToSelectedPlayer(
 			local needRepath =
 				false
 
-			-- ==============================================
-			-- WALK THE PATH
-			-- ==============================================
-
 			for i, waypoint in ipairs(
 				waypoints
 			) do
@@ -1099,10 +1412,6 @@ local function walkToSelectedPlayer(
 					break
 				end
 
-				-- ==========================================
-				-- JUMP WAYPOINT
-				-- ==========================================
-
 				if waypoint.Action
 					== Enum.PathWaypointAction.Jump
 				then
@@ -1125,10 +1434,6 @@ local function walkToSelectedPlayer(
 							#waypoints
 						)
 				)
-
-				-- ==========================================
-				-- EXACT WORKING LOOP
-				-- ==========================================
 
 				while not reachedNode
 					and nodeTimeout
@@ -1169,11 +1474,6 @@ local function walkToSelectedPlayer(
 						break
 					end
 
-					-- ======================================
-					-- THIS IS THE IMPORTANT PART:
-					-- CURRENT WAYPOINT, NOT TARGET
-					-- ======================================
-
 					local diffVector =
 						waypoint.Position
 						- hrp.Position
@@ -1181,9 +1481,12 @@ local function walkToSelectedPlayer(
 					local arrivalDistance
 
 					if i == #waypoints then
+
 						arrivalDistance =
 							FINAL_NODE_DISTANCE
+
 					else
+
 						arrivalDistance =
 							NORMAL_NODE_DISTANCE
 					end
@@ -1197,10 +1500,6 @@ local function walkToSelectedPlayer(
 
 						break
 					end
-
-					-- ======================================
-					-- ANTI-STUCK
-					-- ======================================
 
 					stuckTimer =
 						stuckTimer
@@ -1278,11 +1577,6 @@ local function walkToSelectedPlayer(
 							0
 					end
 
-					-- ======================================
-					-- EXACT SAME MOVEMENT IDEA
-					-- MOVE TOWARD WAYPOINT
-					-- ======================================
-
 					local flatDirection =
 						Vector3.new(
 							diffVector.X,
@@ -1312,12 +1606,9 @@ local function walkToSelectedPlayer(
 					selectedPlayer,
 					token
 				) then
+
 					break
 				end
-
-				-- ==========================================
-				-- CHECK HOW FAR TARGET MOVED
-				-- ==========================================
 
 				targetCharacter =
 					getTargetCharacter(
@@ -1352,6 +1643,7 @@ local function walkToSelectedPlayer(
 			end
 
 			if humanoid then
+
 				humanoid:Move(
 					Vector3.zero,
 					false
@@ -1372,11 +1664,6 @@ local function walkToSelectedPlayer(
 			end
 
 		else
-
-			-- ==============================================
-			-- IMPORTANT:
-			-- NO STRAIGHT-LINE FALLBACK
-			-- ==============================================
 
 			humanoid:Move(
 				Vector3.zero,
@@ -1401,10 +1688,12 @@ end
 
 local function startTracking(player)
 
+	arrivalKeyToken += 1
+	releaseArrivalKey()
+
 	currentPathToken += 1
 
-	targetPlayer =
-		player
+	targetPlayer = player
 
 	if not player then
 
@@ -1428,7 +1717,7 @@ local function startTracking(player)
 end
 
 -- ==========================================================
--- PLAYER LIST UPDATE
+-- PLAYER LIST
 -- ==========================================================
 
 local function updatePlayerList()
@@ -1437,10 +1726,7 @@ local function updatePlayerList()
 		playerScroller:GetChildren()
 	) do
 
-		if child:IsA(
-			"TextButton"
-		) then
-
+		if child:IsA("TextButton") then
 			child:Destroy()
 		end
 	end
@@ -1470,8 +1756,7 @@ local function updatePlayerList()
 			button.Font =
 				Enum.Font.SourceSans
 
-			button.TextSize =
-				14
+			button.TextSize = 14
 
 			button.TextColor3 =
 				Color3.fromRGB(
@@ -1480,12 +1765,9 @@ local function updatePlayerList()
 					255
 				)
 
-			button.BorderSizePixel =
-				0
+			button.BorderSizePixel = 0
 
-			if targetPlayer
-				== player
-			then
+			if targetPlayer == player then
 
 				button.BackgroundColor3 =
 					Color3.fromRGB(
@@ -1514,8 +1796,11 @@ local function updatePlayerList()
 						== player
 					then
 
-						currentPathToken +=
-							1
+						arrivalKeyToken += 1
+
+						releaseArrivalKey()
+
+						currentPathToken += 1
 
 						targetPlayer =
 							nil
@@ -1563,11 +1848,12 @@ local function updatePlayerList()
 				playerLayout.AbsoluteContentSize.Y
 				+ 5
 			)
+
 	end)
 end
 
 -- ==========================================================
--- TOOL LIST UPDATE
+-- TOOL LIST
 -- ==========================================================
 
 local function updateToolList()
@@ -1576,16 +1862,12 @@ local function updateToolList()
 		toolScroller:GetChildren()
 	) do
 
-		if child:IsA(
-			"TextButton"
-		) then
-
+		if child:IsA("TextButton") then
 			child:Destroy()
 		end
 	end
 
-	local shown =
-		{}
+	local shown = {}
 
 	local function scan(container)
 
@@ -1686,9 +1968,10 @@ local function updateToolList()
 	end
 
 	scan(
-		localPlayer:FindFirstChild(
-			"Backpack"
-		)
+		localPlayer:
+			FindFirstChild(
+				"Backpack"
+			)
 	)
 
 	scan(
@@ -1705,6 +1988,7 @@ local function updateToolList()
 				toolLayout.AbsoluteContentSize.Y
 				+ 5
 			)
+
 	end)
 end
 
@@ -1712,8 +1996,7 @@ end
 -- WEAPON SYSTEM
 -- ==========================================================
 
-local lastAttack =
-	0
+local lastAttack = 0
 
 local function updateWeapon()
 
@@ -1751,13 +2034,15 @@ local function updateWeapon()
 		or not targetHumanoid
 		or not targetRoot
 	then
+
 		return
 	end
 
 	local tool =
-		character:FindFirstChild(
-			selectedToolName
-		)
+		character:
+			FindFirstChild(
+				selectedToolName
+			)
 
 	if not tool then
 
@@ -1775,17 +2060,14 @@ local function updateWeapon()
 				)
 
 		if tool then
-
-			tool.Parent =
-				character
+			tool.Parent = character
 		end
 	end
 
 	if not tool
-		or not tool:IsA(
-			"Tool"
-		)
+		or not tool:IsA("Tool")
 	then
+
 		return
 	end
 
@@ -1804,11 +2086,12 @@ local function updateWeapon()
 			>= 0.25
 		then
 
-			lastAttack =
-				now
+			lastAttack = now
 
 			pcall(function()
+
 				tool:Activate()
+
 			end)
 		end
 	end
@@ -1820,14 +2103,14 @@ end
 
 local function stopTracking()
 
-	currentPathToken +=
-		1
+	arrivalKeyToken += 1
 
-	targetPlayer =
-		nil
+	releaseArrivalKey()
 
-	selectedToolName =
-		nil
+	currentPathToken += 1
+
+	targetPlayer = nil
+	selectedToolName = nil
 
 	clearVisuals()
 
@@ -1889,12 +2172,14 @@ stopButton.MouseButton1Click:
 -- ==========================================================
 
 trackConnection(
+
 	RunService.RenderStepped:
 		Connect(function()
 
 			if running then
 				updateVisuals()
 			end
+
 		end)
 )
 
@@ -1903,12 +2188,14 @@ trackConnection(
 -- ==========================================================
 
 trackConnection(
+
 	RunService.Heartbeat:
 		Connect(function()
 
 			if running then
 				updateWeapon()
 			end
+
 		end)
 )
 
@@ -1917,25 +2204,25 @@ trackConnection(
 -- ==========================================================
 
 trackConnection(
+
 	UserInputService.InputBegan:
-		Connect(
-			function(
-				input,
-				processed
-			)
-
-				if processed then
-					return
-				end
-
-				if input.KeyCode
-					== Enum.KeyCode.X
-				then
-
-					stopTracking()
-				end
-			end
+		Connect(function(
+			input,
+			processed
 		)
+
+			if processed then
+				return
+			end
+
+			if input.KeyCode
+				== Enum.KeyCode.X
+			then
+
+				stopTracking()
+			end
+
+		end)
 )
 
 -- ==========================================================
@@ -1943,14 +2230,17 @@ trackConnection(
 -- ==========================================================
 
 trackConnection(
+
 	Players.PlayerAdded:
 		Connect(function()
 
 			updatePlayerList()
+
 		end)
 )
 
 trackConnection(
+
 	Players.PlayerRemoving:
 		Connect(function(player)
 
@@ -1958,11 +2248,13 @@ trackConnection(
 				== player
 			then
 
-				currentPathToken +=
-					1
+				arrivalKeyToken += 1
 
-				targetPlayer =
-					nil
+				releaseArrivalKey()
+
+				currentPathToken += 1
+
+				targetPlayer = nil
 
 				clearVisuals()
 
@@ -1972,6 +2264,7 @@ trackConnection(
 			end
 
 			updatePlayerList()
+
 		end)
 )
 
@@ -1986,22 +2279,26 @@ local backpack =
 		)
 
 trackConnection(
+
 	backpack.ChildAdded:
 		Connect(function()
 
 			task.defer(
 				updateToolList
 			)
+
 		end)
 )
 
 trackConnection(
+
 	backpack.ChildRemoved:
 		Connect(function()
 
 			task.defer(
 				updateToolList
 			)
+
 		end)
 )
 
@@ -2015,17 +2312,16 @@ local function cleanup()
 		return
 	end
 
-	running =
-		false
+	running = false
 
-	currentPathToken +=
-		1
+	arrivalKeyToken += 1
 
-	targetPlayer =
-		nil
+	releaseArrivalKey()
 
-	selectedToolName =
-		nil
+	currentPathToken += 1
+
+	targetPlayer = nil
+	selectedToolName = nil
 
 	local character =
 		getMyCharacter()
@@ -2049,8 +2345,10 @@ local function cleanup()
 	) do
 
 		pcall(function()
+
 			connection:
 				Disconnect()
+
 		end)
 	end
 
@@ -2070,8 +2368,7 @@ local function cleanup()
 			Destroy()
 	end
 
-	_G.PlayerTrackerCleanup =
-		nil
+	_G.PlayerTrackerCleanup = nil
 
 	print(
 		"Player Tracker terminated."
@@ -2099,8 +2396,7 @@ setStatus(
 
 print("====================================")
 print("Player Tracker loaded.")
-print("Path logic copied from working walkToTarget style.")
-print("Movement follows Roblox-generated waypoint positions.")
-print("Beam is visual only.")
+print("Arrival key controlled from GUI.")
+print("Hold duration controlled from GUI.")
 print("Press X to stop.")
 print("====================================")
