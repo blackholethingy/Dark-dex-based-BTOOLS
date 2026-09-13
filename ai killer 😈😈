@@ -103,7 +103,7 @@ _G.KillButton.TextSize = 14
 _G.KillButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
 _G.KillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 _G.KillButton.BorderSizePixel = 0
-killButton.Parent = _G.MainFrame
+_G.KillButton.Parent = _G.MainFrame
 -- PART 2: FEED LIST MANIPULATIONS (Place this second)
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -134,6 +134,7 @@ _G.UpdatePlayerList = function()
 			btn.MouseButton1Click:Connect(function()
 				_G.TargetPlayer = (_G.TargetPlayer == player) and nil or player
 				_G.UpdatePlayerList()
+				if _G.RenderVisualPath then _G.RenderVisualPath() end
 			end)
 		end
 	end
@@ -245,29 +246,50 @@ end
 
 _G.ClearVisualMarkers = function()
 	visualFolder:ClearAllChildren()
+	local oldHighlight = workspace:FindFirstChild("TargetTrackerHighlight")
+	if oldHighlight then oldHighlight:Destroy() end
 end
 
 ----------------------------------------------------------------
--- 5. HIGH RECALL NEON DESIGN PASSES
+-- 5. HIGH RECALL NEON RENDERING PASSES WITH VECTOR FALLBACKS
 ----------------------------------------------------------------
-local function renderVisualPath()
+_G.RenderVisualPath = function()
 	_G.ClearVisualMarkers()
 	
+	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
 	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
-	if targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart") then
-		local targetBox = Instance.new("Part")
-		targetBox.Name = "TargetMarker"
-		targetBox.Size = Vector3.new(2, 2, 2)
-		targetBox.Position = targetCharacter.HumanoidRootPart.Position + Vector3.new(0, 5, 0)
-		targetBox.Color = Color3.fromRGB(0, 255, 0)
-		targetBox.Material = Enum.Material.Neon
-		targetBox.Transparency = 0
-		targetBox.Anchored = true
-		targetBox.CanCollide = false
-		targetBox.CastShadow = false
-		targetBox.Parent = visualFolder
-	end
+	if not targetCharacter or not targetCharacter:FindFirstChild("HumanoidRootPart") then return end
+	if not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then return end
+	
+	local myRoot = myCharacter.HumanoidRootPart
+	local targetRoot = targetCharacter.HumanoidRootPart
 
+	-- 1. Draw Target Marker (Forced Client Draw Neon Green Cube)
+	local targetBox = Instance.new("Part")
+	targetBox.Name = "TargetMarker"
+	targetBox.Size = Vector3.new(2, 2, 2)
+	targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
+	targetBox.Color = Color3.fromRGB(0, 255, 0)
+	targetBox.Material = Enum.Material.Neon
+	targetBox.Transparency = 0
+	targetBox.Anchored = true
+	targetBox.CanCollide = false
+	targetBox.CastShadow = false
+	targetBox.TopSurface = Enum.SurfaceType.Smooth
+	targetBox.BottomSurface = Enum.SurfaceType.Smooth
+	targetBox.Parent = visualFolder
+
+	-- 2. Inject Model Highlight Framework
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "TargetTrackerHighlight"
+	highlight.FillColor = Color3.fromRGB(0, 255, 0)
+	highlight.FillTransparency = 0.65
+	highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
+	highlight.OutlineTransparency = 0
+	highlight.Adornee = targetCharacter
+	highlight.Parent = workspace
+
+	-- 3. Draw Red Trail Markers Spaced 4 Studs Apart (Handles standard path and vector fallbacks)
 	if #_G.ActiveWaypoints > 0 then
 		local lastPlacedPos = nil
 		for i = currentWaypointIndex, #_G.ActiveWaypoints do
@@ -288,11 +310,34 @@ local function renderVisualPath()
 				stepBox.Parent = visualFolder
 			end
 		end
+	else
+		-- FALLBACK DRAW LOOP: Draw directly down the target's look vector if no path array data found
+		local directDistance = (targetRoot.Position - myRoot.Position).Magnitude
+		local segments = math.floor(directDistance / 4) -- Divide straight line into 4-stud steps
+		
+		for i = 1, math.min(segments, 15) do -- Cap at 15 parts to maintain zero lag
+			local alpha = i / segments
+			local calculatedPos = myRoot.Position:Lerp(targetRoot.Position, alpha)
+			
+			local stepBox = Instance.new("Part")
+			stepBox.Name = "PathStep"
+			stepBox.Size = Vector3.new(1.2, 1.2, 1.2)
+			stepBox.Position = calculatedPos + Vector3.new(0, 0.6, 0)
+			stepBox.Color = Color3.fromRGB(255, 0, 0)
+			stepBox.Material = Enum.Material.Neon
+			stepBox.Transparency = 0
+			stepBox.Anchored = true
+			stepBox.CanCollide = false
+			stepBox.CastShadow = false
+			stepBox.TopSurface = Enum.SurfaceType.Smooth
+			stepBox.BottomSurface = Enum.SurfaceType.Smooth
+			stepBox.Parent = visualFolder
+		end
 	end
 end
 
 ----------------------------------------------------------------
--- 6. ASYNC NAVIGATION BOUNDS
+-- 6. ASYNC NAVIGATION LOOP OPERATIONS
 ----------------------------------------------------------------
 local function computeNewPath(startPos, targetPos)
 	local path = PathfindingService:CreatePath({
@@ -304,9 +349,11 @@ local function computeNewPath(startPos, targetPos)
 	local success, _ = pcall(function() path:ComputeAsync(startPos, targetPos) end)
 	if success and path.Status == Enum.PathStatus.Success then
 		_G.ActiveWaypoints = path:GetWaypoints()
-		currentWaypointIndex = 1
-		renderVisualPath()
+	else
+		_G.ActiveWaypoints = {} -- Force fallback rendering tracking behavior
 	end
+	currentWaypointIndex = 1
+	_G.RenderVisualPath()
 end
 
 local function autoRunLoop()
@@ -338,6 +385,7 @@ local function autoRunLoop()
 				end
 			end
 			
+			-- Handle Movements
 			if #_G.ActiveWaypoints > 0 and currentWaypointIndex <= #_G.ActiveWaypoints then
 				local nextWaypoint = _G.ActiveWaypoints[currentWaypointIndex]
 				if (rootPart.Position - nextWaypoint.Position).Magnitude < 3 then
@@ -350,6 +398,7 @@ local function autoRunLoop()
 				humanoid:MoveTo(targetRoot.Position)
 			end
 			
+			-- Combat management
 			if _G.SelectedToolName then
 				local equippedTool = character:FindFirstChild(_G.SelectedToolName)
 				if not equippedTool then
