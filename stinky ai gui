@@ -111,3 +111,299 @@ killButton.MouseButton1Click:Connect(function()
 end)
 
 print("Part 1 loaded successfully.")
+-- ============================================================================
+-- PART 2 - BLOCK A: CORE FUNCTIONS & TARGET STATE TRACKERS
+-- ============================================================================
+local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local config = getgenv().AsylumConfig
+local currentTargetSpill = nil
+local strafeTick = 0
+
+-- Dynamic state collection engine to cleanly survive character respawns
+local function getLocalCharacterState()
+	local char = player.Character
+	if not char then return nil, nil, nil end
+	
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local root = char:FindFirstChild("HumanoidRootPart")
+	
+	if hum and root and hum.Health > 0 then
+		return char, hum, root
+	end
+	return nil, nil, nil
+end
+
+-- Hardcoded reference path to the map infrastructure tool asset
+local function getMopGiverAsset()
+	local map = workspace:FindFirstChild("A_MAP")
+	local infra = map and map:FindFirstChild("Infrastructure")
+	local fac = infra and infra:FindFirstChild("Facility")
+	local under = fac and fac:FindFirstChild("UndergroundFacility")
+	local cafe = under and under:FindFirstChild("CafeGrid")
+	return cafe and cafe:FindFirstChild("Double Mop Giver")
+end
+
+-- Dynamic visual asset and hostile tool filter engine
+local function getSmartCombatTarget()
+	local _, _, hrp = getLocalCharacterState()
+	if not hrp then return nil end
+
+	local closestEnemy = nil
+	local shortestDistance = config.CombatRange
+	
+	for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") then
+			local enemyChar = p.Character
+			local enemyHum = enemyChar.Humanoid
+			
+			if enemyHum.Health > 0 then
+				local isStaff = false
+				
+				-- 1. Scan player names and team labels directly if available
+				local teamName = p.Team and p.Team.Name or ""
+				local lowerTeam = string.lower(teamName)
+				if string.find(lowerTeam, "orderly") or string.find(lowerTeam, "guard") or string.find(lowerTeam, "epu") or string.find(lowerTeam, "staff") then
+					isStaff = true
+				end
+				
+				-- 2. Fallback check: Scan their active tools for server staff items
+				if not isStaff then
+					for _, item in ipairs(enemyChar:GetChildren()) do
+						if item:IsA("Tool") and (string.find(string.lower(item.Name), "stun") or string.find(string.lower(item.Name), "staff") or string.find(string.lower(item.Name), "taser") or string.find(string.lower(item.Name), "handcuff")) then
+							isStaff = true
+							break
+						end
+					end
+				end
+				
+				-- 3. Fallback check: Check their backpack if tools aren't actively held
+				if not isStaff and p:FindFirstChild("Backpack") then
+					for _, item in ipairs(p.Backpack:GetChildren()) do
+						if string.find(string.lower(item.Name), "stun") or string.find(string.lower(item.Name), "staff") or string.find(string.lower(item.Name), "taser") then
+							isStaff = true
+							break
+						end
+					end
+				end
+				
+				if isStaff then
+					local distance = (hrp.Position - enemyChar.HumanoidRootPart.Position).Magnitude
+					if distance < shortestDistance then
+						shortestDistance = distance
+						closestEnemy = enemyChar
+					end
+				end
+			end
+		end
+	end
+	return closestEnemy
+end
+
+local function walkToTarget(targetPosition)
+	local char, humanoid, hrp = getLocalCharacterState()
+	if not hrp or not humanoid then return end
+
+	local visualCube = workspace:FindFirstChild("AITargetCube")
+	if not visualCube then
+		visualCube = Instance.new("Part")
+		visualCube.Name = "AITargetCube"
+		visualCube.Size = Vector3.new(1.5, 1.5, 1.5)
+		visualCube.Anchored = true
+		visualCube.CanCollide = false
+		visualCube.Material = Enum.Material.Neon
+		visualCube.Color = Color3.fromRGB(0, 255, 120)
+		visualCube.Parent = workspace
+	end
+	visualCube.Position = targetPosition
+
+	local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
+	local success = pcall(function() path:ComputeAsync(hrp.Position, targetPosition) end)
+	
+	if success and path.Status == Enum.PathStatus.Success then
+		for _, waypoint in ipairs(path:GetWaypoints()) do
+			char, humanoid, hrp = getLocalCharacterState()
+			if not config.ScriptRunning or (not config.AutoMop and not config.AutoCombat) or not hrp or not humanoid then break end
+			if currentTargetSpill == nil and not getMopGiverAsset() then break end 
+			
+			if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
+			
+			local reachedNode = false
+			local nodeTimeout = 0
+			while not reachedNode and nodeTimeout < 1.5 do
+				char, humanoid, hrp = getLocalCharacterState()
+				if not hrp or not humanoid then break end
+				
+				local diffVector = waypoint.Position - hrp.Position
+				if diffVector.Magnitude <= 3.0 then
+					reachedNode = true
+					break
+				end
+				
+				humanoid:Move(Vector3.new(diffVector.X, 0, diffVector.Z).Unit, false)
+				RunService.PostSimulation:Wait()
+				nodeTimeout = nodeTimeout + 0.015
+			end
+		end
+	end
+	
+	if visualCube then visualCube:Destroy() end
+end
+
+local function findClosestSpill()
+	local _, _, hrp = getLocalCharacterState()
+	if not hrp then return nil end
+
+	local closestSpill = nil
+	local shortestDistance = math.huge
+	local spillsFolder = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Spills")
+	if not spillsFolder then return nil end
+	
+	for _, obj in ipairs(spillsFolder:GetChildren()) do
+		local pos = obj:IsA("BasePart") and obj.Position or obj:IsA("Model") and obj:GetPivot().Position
+		if pos and (string.find(obj.Name, "Spill") or string.find(string.lower(obj.Name), "puddle")) then
+			local distance = (hrp.Position - pos).Magnitude
+			if distance < shortestDistance then
+				shortestDistance = distance
+				closestSpill = obj
+			end
+		end
+	end
+	return closestSpill
+end
+print("Part 2 - Block A loaded.")
+-- ============================================================================
+-- PART 2 - BLOCK B: ACTIVE COMBAT & POST-DEATH MOP RECOVERY LOOPS
+-- ============================================================================
+
+-- Anti-Anti-Cheat Safe Orbit Combat Framework
+RunService.PostSimulation:Connect(function(deltaTime)
+	if not config.ScriptRunning or not config.AutoCombat then return end
+	
+	local character, humanoid, hrp = getLocalCharacterState()
+	if not character or not humanoid or not hrp then return end
+	
+	local target = getSmartCombatTarget()
+	if target and target:FindFirstChild("HumanoidRootPart") then
+		local enemyHrp = target.HumanoidRootPart
+		local distance = (hrp.Position - enemyHrp.Position).Magnitude
+		
+		local backpack = player:FindFirstChild("Backpack")
+		if backpack then
+			local weapon = backpack:FindFirstChildOfClass("Tool")
+			if weapon then 
+				weapon.Parent = character 
+			end
+		end
+		
+		if config.SmartStrafe then
+			strafeTick = strafeTick + (deltaTime * 6)
+			
+			if distance <= config.AttackReach then
+				local repelVector = (hrp.Position - enemyHrp.Position).Unit
+				humanoid:Move(Vector3.new(repelVector.X, 0, repelVector.Z), false)
+			else
+				local orbitRadius = 4.5
+				local offsetX = math.sin(strafeTick) * orbitRadius
+				local offsetZ = math.cos(strafeTick) * orbitRadius
+				local desiredPosition = enemyHrp.Position + Vector3.new(offsetX, 0, offsetZ)
+				
+				local moveDirection = (desiredPosition - hrp.Position).Unit
+				humanoid:Move(Vector3.new(moveDirection.X, 0, moveDirection.Z), false)
+			end
+			hrp.CFrame = CFrame.new(hrp.Position, Vector3.new(enemyHrp.Position.X, hrp.Position.Y, enemyHrp.Position.Z))
+		end
+		
+		if distance <= config.AttackReach then
+			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+			task.wait(0.01)
+			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+		end
+	end
+end)
+
+-- Dedicated Post-Death Janitorial Engine Integration Loop
+task.spawn(function()
+	while config.ScriptRunning do
+		local character, humanoid, hrp = getLocalCharacterState()
+		
+		if not character or not humanoid or not hrp then
+			task.wait(0.5)
+			continue
+		end
+		
+		if config.AutoMop and (not config.AutoCombat or not getSmartCombatTarget()) then
+			local backpack = player:FindFirstChild("Backpack")
+			local ownedMop = backpack and (backpack:FindFirstChild("Mop") or backpack:FindFirstChild("Ignotus Mop")) 
+				or character:FindFirstChild("Mop") or character:FindFirstChild("Ignotus Mop")
+			
+			-- MOP RECOVERY STATE: If killed/respawned without a mop, run retrieval logic
+			if not ownedMop then
+				local giver = getMopGiverAsset()
+				if giver then
+					local targetPos = giver:IsA("Model") and giver:GetPivot().Position or giver:IsA("BasePart") and giver.Position
+					if not targetPos then
+						local fallbackPart = giver:FindFirstChildWhichIsA("BasePart", true)
+						targetPos = fallbackPart and fallbackPart.Position
+					end
+
+					if targetPos then
+						currentTargetSpill = nil -- Suspend mopping to run tool retrieval
+						walkToTarget(targetPos)
+						
+						if (hrp.Position - targetPos).Magnitude <= 8.5 then
+							local prompt = giver:FindFirstChildWhichIsA("ProximityPrompt", true)
+							if prompt then
+								-- Instant trigger sequence for HoldTime = 0
+								prompt:InputBegan(player)
+								task.wait(0.05)
+								prompt:InputEnded(player)
+							else
+								VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+								task.wait(0.05)
+								VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+							end
+							task.wait(0.3)
+						end
+					end
+				else
+					warn("[Mop Recovery] Error: 'Double Mop Giver' path could not be located inside workspace.")
+					task.wait(2)
+				end
+				
+				task.wait(0.1)
+				continue
+			end
+			
+			-- STANDARD AUTO-MOP LOOP (Fires instantly once inventory ownership is verified)
+			if backpack and ownedMop and ownedMop.Parent == backpack then 
+				ownedMop.Parent = character 
+			end
+			
+			currentTargetSpill = findClosestSpill()
+			if currentTargetSpill and currentTargetSpill.Parent then
+				local targetPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
+				
+				walkToTarget(targetPos)
+				
+				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= 6.0 then
+					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+					
+					local holdTimeout = 0
+					while currentTargetSpill and currentTargetSpill.Parent and holdTimeout < 5.0 do
+						task.wait(0.1)
+						holdTimeout = holdTimeout + 0.1
+						if config.AutoCombat and getSmartCombatTarget() then break end
+					end
+					
+					VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+				end
+			end
+		end
+		task.wait(0.1)
+	end
+end)
+
+print("Part 2 - Block B runtime execution loops started successfully.")
