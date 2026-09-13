@@ -110,7 +110,7 @@ killButton.MouseButton1Click:Connect(function()
 	print("GUI Core uninstalled.")
 end)
 
-print("Part 1: Master UI loaded successfully.")
+print("Part 1: UI Framework built successfully.")
 -- ============================================================================
 -- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS (INSTANT CLICK FIX)
 -- ============================================================================
@@ -227,7 +227,7 @@ local function walkToTarget(targetPosition)
 			char, humanoid, hrp = getLocalCharacterState()
 			if not config.ScriptRunning or (not config.AutoMop and not config.AutoCombat) or not hrp or not humanoid then break end
 			
-			-- INSTANT BREAK FIX: If we touch the spill boundary while moving, halt walking and start mopping immediately
+			-- ZERO LATENCY OVERRIDE: Drop navigation loop immediately if we match cleaning perimeter requirements mid-path
 			if currentTargetSpill and currentTargetSpill.Parent then
 				local spillPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
 				local currentDist = (hrp.Position - spillPos).Magnitude
@@ -264,7 +264,7 @@ local function walkToTarget(targetPosition)
 				if stuckTimer >= 0.8 then
 					local distanceMoved = (hrp.Position - lastPosition).Magnitude
 					if distanceMoved <= 1.2 then
-						print("[Anti-Stuck] Railing bottleneck detected. Executing dynamic forward vault...")
+						print("[Anti-Stuck] Railing lock recognized. Vaulting obstacle forward...")
 						humanoid.Jump = true
 						
 						local forwardVector = Vector3.new(diffVector.X, 0, diffVector.Z).Unit
@@ -312,10 +312,36 @@ local function findClosestSpill()
 	end
 	return closestSpill
 end
-print("Part 2: Operational core trackers loaded with zero-latency proximity overrides.")
+print("Part 2: Operational core trackers loaded.")
 -- ============================================================================
--- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS
+-- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS (WEAPON FIXED)
 -- ============================================================================
+
+-- Dedicated helper logic to force weapon equips and exclude cleaning gear during active spikes
+local function forceEquipMeleeWeapon(character, backpack)
+	local activeTool = character:FindFirstChildOfClass("Tool")
+	if activeTool and (string.find(string.lower(activeTool.Name), "fist") or string.find(string.lower(activeTool.Name), "bat") or string.find(string.lower(activeTool.Name), "knife") or string.find(string.lower(activeTool.Name), "melee") or string.find(string.lower(activeTool.Name), "weapon")) then
+		return activeTool
+	end
+
+	local weaponKeywords = {"knife", "bat", "fist", "melee", "weapon"}
+	for _, keyword in ipairs(weaponKeywords) do
+		for _, item in ipairs(backpack:GetChildren()) do
+			if item:IsA("Tool") and string.find(string.lower(item.Name), keyword) then
+				item.Parent = character
+				return item
+			end
+		end
+	end
+
+	for _, item in ipairs(backpack:GetChildren()) do
+		if item:IsA("Tool") and not string.find(string.lower(item.Name), "mop") and not string.find(string.lower(item.Name), "ignotus") then
+			item.Parent = character
+			return item
+		end
+	end
+	return nil
+end
 
 -- Anti-Anti-Cheat Safe Orbit Combat Framework Loop
 RunService.PostSimulation:Connect(function(deltaTime)
@@ -329,12 +355,10 @@ RunService.PostSimulation:Connect(function(deltaTime)
 		local enemyHrp = target.HumanoidRootPart
 		local distance = (hrp.Position - enemyHrp.Position).Magnitude
 		
+		-- Safely locks out tool swap conflicts by prioritising actual combat objects
 		local backpack = player:FindFirstChild("Backpack")
 		if backpack then
-			local weapon = backpack:FindFirstChildOfClass("Tool")
-			if weapon then 
-				weapon.Parent = character 
-			end
+			forceEquipMeleeWeapon(character, backpack)
 		end
 		
 		if config.SmartStrafe then
@@ -393,7 +417,6 @@ task.spawn(function()
 						walkToTarget(targetPos)
 						
 						if (hrp.Position - targetPos).Magnitude <= 8.5 then
-							-- Deep search every descendant for ANY ProximityPrompt instance
 							local prompt = nil
 							for _, descendant in ipairs(giver:GetDescendants()) do
 								if descendant:IsA("ProximityPrompt") then
@@ -440,7 +463,6 @@ task.spawn(function()
 				
 				walkToTarget(targetPos)
 				
-				-- Dynamic range adjustment handles wide puddle perimeters seamlessly
 				local interactionRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
 				
 				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= interactionRange then
@@ -462,4 +484,4 @@ task.spawn(function()
 	end
 end)
 
-print("Part 3: Complete multi-threaded execution loops started cleanly.")
+print("Part 3: Runtime loops successfully initiated.")
