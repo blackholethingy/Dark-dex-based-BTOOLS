@@ -256,7 +256,7 @@ targetHighlight.Parent = workspace
 
 local targetBox = visualFolder:FindFirstChild("TargetMarker") or Instance.new("Part")
 targetBox.Name = "TargetMarker"
-targetBox.Size = Vector3.new(2.2, 0.1, 2.2) -- Thin flat wafer disk
+targetBox.Size = Vector3.new(2.2, 0.1, 2.2) 
 targetBox.Color = Color3.fromRGB(0, 255, 0)
 targetBox.Material = Enum.Material.Neon
 targetBox.Transparency = 1 
@@ -265,24 +265,22 @@ targetBox.CanCollide = false
 targetBox.CastShadow = false
 targetBox.Parent = visualFolder
 
--- Initialize a pooled chain of 6 attachments and 5 beams to draw path joints without lag
+-- Initialize a pooled chain of 5 beams to draw path joints without lag
 local beamPool = {}
 local attachmentPool = {}
 
--- Node 1 sits directly inside your character's root part
 local playerOriginAttachment = Instance.new("Attachment")
 playerOriginAttachment.Name = "TrackerPlayerOriginAttachment"
 
--- Generate path step segments
 for i = 1, 5 do
 	local att = Instance.new("Attachment")
 	att.Name = "PathAttachmentNode" .. i
-	att.Parent = targetBox -- Anchored to world space frame via the green box model container
+	att.Parent = targetBox 
 	attachmentPool[i] = att
 	
 	local beam = Instance.new("Beam")
 	beam.Name = "PathBeamSegment" .. i
-	beam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- Neon Red lines
+	beam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) 
 	beam.Width0 = 0.4
 	beam.Width1 = 0.4
 	beam.LightEmission = 1
@@ -293,7 +291,6 @@ for i = 1, 5 do
 	beamPool[i] = beam
 end
 
--- Link beam joints sequentially
 beamPool[1].Attachment0 = playerOriginAttachment
 beamPool[1].Attachment1 = attachmentPool[1]
 for i = 2, 5 do
@@ -353,7 +350,6 @@ _G.RenderVisualPath = function()
 		targetBox.Transparency = 0
 		playerOriginAttachment.Parent = myRoot
 
-		-- Distribute the 5 beam paths across waypoint corners dynamically
 		local beamIndex = 1
 		if #_G.ActiveWaypoints > 0 then
 			local lastPlacedPos = myRoot.Position
@@ -362,11 +358,8 @@ _G.RenderVisualPath = function()
 				if beamIndex > 5 then break end
 				local wp = _G.ActiveWaypoints[i]
 				
-				-- Only drop a beam pivot joint if the path bends significantly
 				if (wp.Position - lastPlacedPos).Magnitude >= 5 or i == #_G.ActiveWaypoints then
 					lastPlacedPos = wp.Position
-					
-					-- Move attachment out of world center into waypoint junction space coordinate points
 					attachmentPool[beamIndex].WorldPosition = wp.Position + Vector3.new(0, 0.5, 0)
 					beamPool[beamIndex].Enabled = true
 					beamIndex = beamIndex + 1
@@ -374,12 +367,10 @@ _G.RenderVisualPath = function()
 			end
 		end
 
-		-- Connect the remaining end lines directly to the target's feet plate
 		for i = beamIndex, 5 do
 			attachmentPool[i].WorldPosition = targetBox.Position
-			beamPool[i].Enabled = (beamIndex == 1) -- If no path found, use 1 straight beam line
+			beamPool[i].Enabled = (beamIndex == 1) 
 		end
-		beamPool[1].Enabled = true
 	end
 end
 
@@ -404,7 +395,16 @@ local function computeNewPath(startPos, targetPos)
 end
 
 local function autoRunLoop()
-	if not _G.IsScriptRunning then return end
+	-- AUTO-DESTRUCT SAFETY VALVE: Stops the script loop automatically if the GUI folder is missing/deleted
+	local guiCheck = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
+	if not guiCheck or not _G.IsScriptRunning then
+		_G.IsScriptRunning = false
+		if _G.LoopConnection then _G.LoopConnection:Disconnect() _G.LoopConnection = nil end
+		if _G.InputConnection then _G.InputConnection:Disconnect() _G.InputConnection = nil end
+		_G.ClearVisualMarkers()
+		print("Auto-Tracker terminated due to missing GUI window folder container.")
+		return
+	end
 
 	local character = _G.GetMyCharacter and _G.GetMyCharacter()
 	if not character then return end
@@ -422,17 +422,14 @@ local function autoRunLoop()
 			local trueFeetPos = getExactFeetPositionR6(targetCharacter) or (targetRoot.Position - Vector3.new(0, 3, 0))
 			local distance = (rootPart.Position - targetRoot.Position).Magnitude
 			
-			-- Official Pathfinding recalculation timer tick
 			local now = tick()
 			if now - lastPathUpdateTime > PATH_RECALC_TIME then
 				lastPathUpdateTime = now
 				computeNewPath(rootPart.Position, trueFeetPos)
 			else
-				-- Keep the rendering alignment tracking actively mapped to frame renders
 				_G.RenderVisualPath()
 			end
 			
-			-- Process Waypoint Indexes
 			if #_G.ActiveWaypoints > 0 and currentWaypointIndex <= #_G.ActiveWaypoints then
 				local nextWaypoint = _G.ActiveWaypoints[currentWaypointIndex]
 				if (rootPart.Position - nextWaypoint.Position).Magnitude < 3 then
@@ -445,7 +442,6 @@ local function autoRunLoop()
 				humanoid:MoveTo(trueFeetPos)
 			end
 			
-			-- Weapon Activation Handling
 			if _G.SelectedToolName then
 				local equippedTool = character:FindFirstChild(_G.SelectedToolName)
 				if not equippedTool then
