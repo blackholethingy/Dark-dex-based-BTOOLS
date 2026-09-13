@@ -1,0 +1,194 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Debris = game:GetService("Debris")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local hrp = character:WaitForChild("HumanoidRootPart")
+local camera = workspace.CurrentCamera
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Controls Mapping
+local TOGGLE_FLY_KEY = Enum.KeyCode.X
+local PHASE_KEY = Enum.KeyCode.H
+local SELF_DESTRUCT_KEY = Enum.KeyCode.K
+
+-- Settings
+local FLY_SPEED = 32 
+local platformThickness = 0.2
+local platformSize = Vector3.new(4, platformThickness, 4)
+local platformLifetime = 0.2 
+local phaseRange = 10 
+
+-- Logic States
+local flyActive = false
+local scriptDestroyed = false
+local activeConnections = {}
+local cutBlocks = {}
+local movementInput = {W = 0, S = 0, A = 0, D = 0, Space = 0, C = 0}
+
+-- 1. Create On-Screen GUI Button
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "FlyKillGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local killButton = Instance.new("TextButton")
+killButton.Name = "KillButton"
+killButton.Size = UDim2.new(0, 120, 0, 40)
+killButton.Position = UDim2.new(1, -140, 1, -60) -- Bottom right corner
+killButton.BackgroundColor3 = Color3.fromRGB(220, 50, 50)
+killButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+killButton.TextSize = 14
+killButton.Font = Enum.Font.SourceSansBold
+killButton.Text = "KILL SCRIPT"
+killButton.Parent = screenGui
+
+-- Rounded corners for the button style
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = killButton
+
+-- Forward declarations
+local selfDestructScript
+
+-- Platform Spawning
+local function spawnPlatform(position)
+	if not flyActive or scriptDestroyed then return end
+	local part = Instance.new("Part")
+	part.Size = platformSize
+	part.CFrame = CFrame.new(position - Vector3.new(0, (humanoid.HipHeight + (platformThickness / 2) + 0.1), 0))
+	part.Anchored = true
+	part.Material = Enum.Material.Neon
+	part.Color = Color3.fromRGB(0, 170, 255)
+	part.Transparency = 0.4 
+	part.CanCollide = true
+	part.Parent = workspace
+	Debris:AddItem(part, platformLifetime)
+end
+
+local function isPlayerMoving()
+	return (movementInput.W ~= 0 or movementInput.S ~= 0 or movementInput.A ~= 0 or movementInput.D ~= 0 or movementInput.Space ~= 0 or movementInput.C ~= 0)
+end
+
+local function safePasteBlock(targetPart, origTransparency, origCanCollide)
+	task.spawn(function()
+		local region = Region3.new(targetPart.Position - (targetPart.Size / 2), targetPart.Position + (targetPart.Size / 2))
+		while true do
+			if scriptDestroyed then break end
+			local partsInRegion = workspace:FindPartsInRegion3WithWhiteList(region, {character}, 10)
+			local playerStillInside = false
+			for _, p in ipairs(partsInRegion) do
+				if p:IsDescendantOf(character) then playerStillInside = true break end
+			end
+			if not playerStillInside then break end
+			task.wait(0.2)
+		end
+		if targetPart and targetPart.Parent then
+			targetPart.Transparency = origTransparency
+			targetPart.CanCollide = origCanCollide
+			cutBlocks[targetPart] = nil
+		end
+	end)
+end
+
+local function executePhase()
+	if not isPlayerMoving() then return end
+	local raycastResult = workspace:Raycast(hrp.Position, hrp.CFrame.LookVector * phaseRange, RaycastParams.new())
+	if raycastResult and raycastResult.Instance then
+		local targetPart = raycastResult.Instance
+		if targetPart:IsA("BasePart") and not targetPart.Locked and not cutBlocks[targetPart] then
+			local origT, origC = targetPart.Transparency, targetPart.CanCollide
+			cutBlocks[targetPart] = true
+			targetPart.Transparency = 1
+			targetPart.CanCollide = false
+			safePasteBlock(targetPart, origT, origC)
+		end
+	end
+end
+
+-- Completely Purge Script & GUI
+selfDestructScript = function()
+	if scriptDestroyed then return end
+	scriptDestroyed = true
+	flyActive = false
+	
+	for _, connection in ipairs(activeConnections) do 
+		if connection then connection:Disconnect() end 
+	end
+	
+	for targetPart, _ in pairs(cutBlocks) do
+		pcall(function() targetPart.Transparency = 0 targetPart.CanCollide = true end)
+	end
+	
+	if humanoid then 
+		humanoid.PlatformStand = false 
+		humanoid:ChangeState(Enum.HumanoidStateType.Running) 
+	end
+	
+	if screenGui then screenGui:Destroy() end
+	script:Destroy()
+end
+
+-- GUI Click Event
+table.insert(activeConnections, killButton.MouseButton1Click:Connect(selfDestructScript))
+
+-- Input Listeners
+table.insert(activeConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or scriptDestroyed then return end
+	if input.KeyCode == TOGGLE_FLY_KEY then
+		flyActive = not flyActive
+	elseif input.KeyCode == SELF_DESTRUCT_KEY then selfDestructScript()
+	elseif input.KeyCode == PHASE_KEY then executePhase()
+	elseif input.KeyCode == Enum.KeyCode.W then movementInput.W = 1
+	elseif input.KeyCode == Enum.KeyCode.S then movementInput.S = -1
+	elseif input.KeyCode == Enum.KeyCode.A then movementInput.A = -1
+	elseif input.KeyCode == Enum.KeyCode.D then movementInput.D = 1
+	elseif input.KeyCode == Enum.KeyCode.Space then movementInput.Space = 1
+	elseif input.KeyCode == Enum.KeyCode.C then movementInput.C = -1
+	end
+end))
+
+table.insert(activeConnections, UserInputService.InputEnded:Connect(function(input, gameProcessed)
+	if scriptDestroyed then return end
+	if input.KeyCode == Enum.KeyCode.W then movementInput.W = 0
+	elseif input.KeyCode == Enum.KeyCode.S then movementInput.S = 0
+	elseif input.KeyCode == Enum.KeyCode.A then movementInput.A = 0
+	elseif input.KeyCode == Enum.KeyCode.D then movementInput.D = 0
+	elseif input.KeyCode == Enum.KeyCode.Space then movementInput.Space = 0
+	elseif input.KeyCode == Enum.KeyCode.C then movementInput.C = 0
+	end
+end))
+
+-- Movement Core Loop
+table.insert(activeConnections, RunService.PostSimulation:Connect(function()
+	if not flyActive or scriptDestroyed then return end
+	
+	humanoid.PlatformStand = false 
+	
+	local camLook = camera.CFrame.LookVector
+	local flatLook = Vector3.new(camLook.X, 0, camLook.Z).Unit
+	local camRight = camera.CFrame.RightVector
+	local flatRight = Vector3.new(camRight.X, 0, camRight.Z).Unit
+	
+	local moveDir = Vector3.zero
+	moveDir = moveDir + (flatLook * (movementInput.W + movementInput.S))
+	moveDir = moveDir + (flatRight * (movementInput.A + movementInput.D))
+	
+	local verticalVelocity = 0
+	if movementInput.Space == 1 then
+		verticalVelocity = FLY_SPEED
+	elseif movementInput.C == -1 then
+		verticalVelocity = -FLY_SPEED
+	end
+	
+	if moveDir.Magnitude > 0 or verticalVelocity ~= 0 then
+		if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+		hrp.AssemblyLinearVelocity = (moveDir * FLY_SPEED) + Vector3.new(0, verticalVelocity, 0)
+		spawnPlatform(hrp.Position)
+	else
+		hrp.AssemblyLinearVelocity = Vector3.zero
+	end
+end))
