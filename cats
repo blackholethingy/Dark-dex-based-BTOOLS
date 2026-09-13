@@ -1,5 +1,5 @@
 -- ============================================================================
--- STANDALONE LOCAL CAT MAGNET ENGINE
+-- BLOCK 1: MASTER UI WINDOW & TARGET AGGREGATION
 -- ============================================================================
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -9,14 +9,14 @@ local playerGui = player:WaitForChild("PlayerGui")
 getgenv().LocalCatMagnet = {
 	Active = false,
 	ScriptRunning = true,
-	Radius = 4.5,       -- How far the cats float from you
-	OrbitSpeed = 3.0    -- How fast the ring spins
+	Radius = 4.5,       -- Distance of the cats ring from your character
+	OrbitSpeed = 3.0    -- Rotational speed of the ring
 }
 
 local config = getgenv().LocalCatMagnet
 local runningTime = 0
 
--- Clean, Minimal HUD Window
+-- Setup Independent Minimalist Interface Display Frame
 if playerGui:FindFirstChild("CatMagnetHUD") then
 	playerGui.CatMagnetHUD:Destroy()
 end
@@ -57,7 +57,7 @@ toggleBtn.Text = "MAGNET: OFF"
 toggleBtn.Parent = frame
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 6)
 
--- Core Dynamic Handlers
+-- Core Target Collection Handlers
 local function getValidRoot()
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -76,11 +76,12 @@ local function gatherWorkspaceCats()
 		end
 	end
 	return collected
+end -- FIXED: Added explicit function termination block closure
 -- ============================================================================
--- PIPELINE CONTINUATION: REAL-TIME CLIENT POSITIONING
+-- BLOCK 2: RUNTIME COORD TRANSFORMS & TOGGLE CONNECTORS
 -- ============================================================================
 
-local magnetLoop
+local magnetConnection
 magnetConnection = RunService.PostSimulation:Connect(function(deltaTime)
 	if not config.ScriptRunning then
 		if magnetConnection then magnetConnection:Disconnect() end
@@ -89,31 +90,44 @@ magnetConnection = RunService.PostSimulation:Connect(function(deltaTime)
 
 	if not config.Active then return end
 
-	local hrp = getValidRoot()
-	if hrp then
+	-- Re-run root check verification frame-by-frame
+	local char = game:GetService("Players").LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	
+	if hrp and hum and hum.Health > 0 then
 		runningTime = runningTime + (deltaTime * config.OrbitSpeed)
-		local currentCats = gatherWorkspaceCats()
+		
+		-- Fetch target cat models recursively
+		local currentCats = {}
+		for _, desc in ipairs(workspace:GetDescendants()) do
+			if desc:IsA("Model") and desc.Name == "Cat" then
+				if desc.PrimaryPart or desc:FindFirstChildWhichIsA("BasePart", true) then
+					table.insert(currentCats, desc)
+				end
+			end
+		end
+		
 		local total = #currentCats
-
 		if total > 0 then
 			for index, cat in ipairs(currentCats) do
 				if cat and cat.Parent then
-					-- Arrange cats in an even mathematical wheel pattern
+					-- Calculate perfect mathematical slices for an evenly spaced circle ring array
 					local offsetAngle = (index / total) * (math.PI * 2)
 					local currentAngle = runningTime + offsetAngle
 
 					local x = math.sin(currentAngle) * config.Radius
 					local z = math.cos(currentAngle) * config.Radius
 
-					-- Align cat models directly at waist height surrounding you
+					-- Align cat position vectors safely at waist height level centered on your player
 					local placementCFrame = CFrame.new(hrp.Position + Vector3.new(x, 0, z))
 						* CFrame.Angles(0, currentAngle + math.PI, 0)
 
 					pcall(function()
-						-- Client-side smooth translation push
+						-- Client-side model translation update
 						cat:PivotTo(placementCFrame)
 
-						-- Kill assembly velocities locally so models don't lag or drop down
+						-- Kill physical velocity parameters locally to prevent models falling out of the orbital radius
 						local part = cat.PrimaryPart or cat:FindFirstChildWhichIsA("BasePart", true)
 						if part then
 							part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -126,7 +140,7 @@ magnetConnection = RunService.PostSimulation:Connect(function(deltaTime)
 	end
 end)
 
--- Connect HUD Interface Controller Action Inputs
+-- Connect HUD Interface Controller Configuration Input Actions
 toggleBtn.MouseButton1Click:Connect(function()
 	if not config.ScriptRunning then return end
 	config.Active = not config.Active
@@ -145,7 +159,7 @@ end)
 screenGui.Destroying:Connect(function()
 	config.ScriptRunning = false
 	config.Active = false
-	print("Cat Magnet memory layers detached successfully.")
+	print("Cat Magnet memory pipeline cleared out safely.")
 end)
 
-print("Standalone Cat Magnet fully compiled and deployed.")
+print("Standalone Cat Magnet compiled with fixed function closures.")
