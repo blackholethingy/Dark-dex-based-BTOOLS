@@ -178,6 +178,7 @@ killButton.MouseButton1Click:Connect(function()
 	_G.IsScriptRunning = false
 	if _G.LoopConnection then _G.LoopConnection:Disconnect() end
 	if _G.InputConnection then _G.InputConnection:Disconnect() end
+	if _G.ClearVisualMarkers then _G.ClearVisualMarkers() end
 	screenGui:Destroy()
 	print("Auto-Tracker terminated.")
 end)
@@ -201,13 +202,71 @@ local lastPathUpdateTime = 0
 local currentWaypoints = {}
 local currentWaypointIndex = 1
 
+-- Visual Tracker Folder Definition
+local visualFolder = workspace:FindFirstChild("TrackerVisuals") or Instance.new("Folder")
+visualFolder.Name = "TrackerVisuals"
+visualFolder.Parent = workspace
+
 ----------------------------------------------------------------
--- 4. EMERGENCY RESET AND UNSELECT FUNCTION
+-- 4. UTILITY: VISUAL MARKER GENERATORS
+----------------------------------------------------------------
+_G.ClearVisualMarkers = function()
+	visualFolder:ClearAllChildren()
+end
+
+local function renderVisualPath()
+	_G.ClearVisualMarkers()
+	
+	-- 1. Draw Target Marker (Green Cube)
+	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
+	if targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart") then
+		local targetRoot = targetCharacter.HumanoidRootPart
+		
+		local targetBox = Instance.new("Part")
+		targetBox.Name = "TargetMarker"
+		targetBox.Size = Vector3.new(2, 2, 2)
+		targetBox.Position = targetRoot.Position + Vector3.new(0, 4, 0) -- Hover above head
+		targetBox.Color = Color3.fromRGB(0, 255, 0)
+		targetBox.Material = Enum.Material.Neon
+		targetBox.Anchored = true
+		targetBox.CanCollide = false
+		targetBox.Parent = visualFolder
+	end
+
+	-- 2. Draw Navigation Markers (Red Cubes spaced ~4 studs apart)
+	if #currentWaypoints > 0 then
+		local lastPlacedPos = nil
+		
+		-- Iterate through waypoints starting past the player's immediate stance
+		for i = currentWaypointIndex, #currentWaypoints do
+			local wp = currentWaypoints[i]
+			
+			-- Only render marker if it is the first node or far enough from the last drawn marker
+			if not lastPlacedPos or (wp.Position - lastPlacedPos).Magnitude >= 4 then
+				lastPlacedPos = wp.Position
+				
+				local stepBox = Instance.new("Part")
+				stepBox.Name = "PathStep"
+				stepBox.Size = Vector3.new(1, 1, 1)
+				stepBox.Position = wp.Position + Vector3.new(0, 0.5, 0) -- Rest slightly above ground
+				stepBox.Color = Color3.fromRGB(255, 0, 0)
+				stepBox.Material = Enum.Material.Neon
+				stepBox.Anchored = true
+				stepBox.CanCollide = false
+				stepBox.Parent = visualFolder
+			end
+		end
+	end
+end
+
+----------------------------------------------------------------
+-- 5. EMERGENCY RESET AND UNSELECT FUNCTION
 ----------------------------------------------------------------
 _G.StopAllTracking = function()
 	_G.TargetPlayer = nil
 	_G.SelectedToolName = nil
 	currentWaypoints = {}
+	_G.ClearVisualMarkers()
 	
 	local character = _G.GetMyCharacter and _G.GetMyCharacter()
 	if character then
@@ -237,7 +296,7 @@ _G.InputConnection = UserInputService.InputBegan:Connect(function(input, gamePro
 end)
 
 ----------------------------------------------------------------
--- 5. PATHFINDING & CONTROL TRACKING LOOP
+-- 6. PATHFINDING & CONTROL TRACKING LOOP
 ----------------------------------------------------------------
 local function computeNewPath(startPos, targetPos)
 	local path = PathfindingService:CreatePath({
@@ -250,6 +309,7 @@ local function computeNewPath(startPos, targetPos)
 	if success and path.Status == Enum.PathStatus.Success then
 		currentWaypoints = path:GetWaypoints()
 		currentWaypointIndex = 1
+		renderVisualPath() -- Redraw indicators whenever path layout refreshes
 	end
 end
 
@@ -276,6 +336,12 @@ local function autoRunLoop()
 			if now - lastPathUpdateTime > PATH_RECALC_TIME then
 				lastPathUpdateTime = now
 				computeNewPath(rootPart.Position, targetRoot.Position)
+			else
+				-- Continuously update the green block position tracking the target
+				local trackingMarker = visualFolder:FindFirstChild("TargetMarker")
+				if trackingMarker then
+					trackingMarker.Position = targetRoot.Position + Vector3.new(0, 4, 0)
+				end
 			end
 			
 			if #currentWaypoints > 0 and currentWaypointIndex <= #currentWaypoints then
@@ -308,6 +374,12 @@ local function autoRunLoop()
 			end
 		else
 			currentWaypoints = {}
+			_G.ClearVisualMarkers()
+		end
+	else
+		-- Clear visuals if no target is active
+		if #visualFolder:GetChildren() > 0 then
+			_G.ClearVisualMarkers()
 		end
 	end
 end
