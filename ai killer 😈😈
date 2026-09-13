@@ -100,10 +100,10 @@ _G.KillButton.Position = UDim2.new(0, 5, 1, -45)
 _G.KillButton.Text = "KILL SCRIPT"
 _G.KillButton.Font = Enum.Font.SourceSansBold
 _G.KillButton.TextSize = 14
-_G.KillButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-_G.KillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-_G.KillButton.BorderSizePixel = 0
-_G.KillButton.Parent = _G.MainFrame
+killButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+killButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+killButton.BorderSizePixel = 0
+killButton.Parent = _G.MainFrame
 -- PART 2: FEED LIST MANIPULATIONS (Place this second)
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -231,7 +231,7 @@ local RunService = game:GetService("RunService")
 local localPlayer = game:GetService("Players").LocalPlayer
 
 local ATTACK_RANGE = 8
-local PATH_RECALC_TIME = 0.5
+local PATH_RECALC_TIME = 1.0 -- Increased to 1.0s to drastically lower computational overhead
 local lastPathUpdateTime = 0
 _G.ActiveWaypoints = {}
 local currentWaypointIndex = 1
@@ -244,100 +244,111 @@ if not visualFolder then
 	visualFolder.Parent = workspace
 end
 
-_G.ClearVisualMarkers = function()
-	visualFolder:ClearAllChildren()
-	local oldHighlight = workspace:FindFirstChild("TargetTrackerHighlight")
-	if oldHighlight then oldHighlight:Destroy() end
+-- Create permanent visual highlight frameworks (Pooled once on load)
+local targetHighlight = workspace:FindFirstChild("TargetTrackerHighlight") or Instance.new("Highlight")
+targetHighlight.Name = "TargetTrackerHighlight"
+targetHighlight.FillColor = Color3.fromRGB(0, 255, 0)
+targetHighlight.FillTransparency = 0.65
+targetHighlight.OutlineColor = Color3.fromRGB(0, 255, 0)
+targetHighlight.OutlineTransparency = 0
+targetHighlight.Enabled = false
+targetHighlight.Parent = workspace
+
+local targetBox = visualFolder:FindFirstChild("TargetMarker") or Instance.new("Part")
+targetBox.Name = "TargetMarker"
+targetBox.Size = Vector3.new(2, 2, 2)
+targetBox.Color = Color3.fromRGB(0, 255, 0)
+targetBox.Material = Enum.Material.Neon
+targetBox.Transparency = 1 -- Start invisible
+targetBox.Anchored = true
+targetBox.CanCollide = false
+targetBox.CastShadow = false
+targetBox.Parent = visualFolder
+
+-- Initialize fixed pool of 15 trail nodes to fix layout generation lag completely
+local trailPool = {}
+for i = 1, 15 do
+	local p = visualFolder:FindFirstChild("PathStep" .. i) or Instance.new("Part")
+	p.Name = "PathStep" .. i
+	p.Size = Vector3.new(1.2, 1.2, 1.2)
+	p.Color = Color3.fromRGB(255, 0, 0)
+	p.Material = Enum.Material.Neon
+	p.Transparency = 1 -- Hidden by default
+	p.Anchored = true
+	p.CanCollide = false
+	p.CastShadow = false
+	p.Parent = visualFolder
+	trailPool[i] = p
 end
 
-----------------------------------------------------------------
--- 5. HIGH RECALL NEON RENDERING PASSES WITH VECTOR FALLBACKS
-----------------------------------------------------------------
-_G.RenderVisualPath = function()
-	_G.ClearVisualMarkers()
-	
-	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
-	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
-	if not targetCharacter or not targetCharacter:FindFirstChild("HumanoidRootPart") then return end
-	if not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then return end
-	
-	local myRoot = myCharacter.HumanoidRootPart
-	local targetRoot = targetCharacter.HumanoidRootPart
-
-	-- 1. Draw Target Marker (Forced Client Draw Neon Green Cube)
-	local targetBox = Instance.new("Part")
-	targetBox.Name = "TargetMarker"
-	targetBox.Size = Vector3.new(2, 2, 2)
-	targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
-	targetBox.Color = Color3.fromRGB(0, 255, 0)
-	targetBox.Material = Enum.Material.Neon
-	targetBox.Transparency = 0
-	targetBox.Anchored = true
-	targetBox.CanCollide = false
-	targetBox.CastShadow = false
-	targetBox.TopSurface = Enum.SurfaceType.Smooth
-	targetBox.BottomSurface = Enum.SurfaceType.Smooth
-	targetBox.Parent = visualFolder
-
-	-- 2. Inject Model Highlight Framework
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "TargetTrackerHighlight"
-	highlight.FillColor = Color3.fromRGB(0, 255, 0)
-	highlight.FillTransparency = 0.65
-	highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
-	highlight.OutlineTransparency = 0
-	highlight.Adornee = targetCharacter
-	highlight.Parent = workspace
-
-	-- 3. Draw Red Trail Markers Spaced 4 Studs Apart (Handles standard path and vector fallbacks)
-	if #_G.ActiveWaypoints > 0 then
-		local lastPlacedPos = nil
-		for i = currentWaypointIndex, #_G.ActiveWaypoints do
-			local wp = _G.ActiveWaypoints[i]
-			if not lastPlacedPos or (wp.Position - lastPlacedPos).Magnitude >= 4 then
-				lastPlacedPos = wp.Position
-				
-				local stepBox = Instance.new("Part")
-				stepBox.Name = "PathStep"
-				stepBox.Size = Vector3.new(1.2, 1.2, 1.2)
-				stepBox.Position = wp.Position + Vector3.new(0, 0.6, 0)
-				stepBox.Color = Color3.fromRGB(255, 0, 0)
-				stepBox.Material = Enum.Material.Neon
-				stepBox.Transparency = 0
-				stepBox.Anchored = true
-				stepBox.CanCollide = false
-				stepBox.CastShadow = false
-				stepBox.Parent = visualFolder
-			end
-		end
-	else
-		-- FALLBACK DRAW LOOP: Draw directly down the target's look vector if no path array data found
-		local directDistance = (targetRoot.Position - myRoot.Position).Magnitude
-		local segments = math.floor(directDistance / 4) -- Divide straight line into 4-stud steps
-		
-		for i = 1, math.min(segments, 15) do -- Cap at 15 parts to maintain zero lag
-			local alpha = i / segments
-			local calculatedPos = myRoot.Position:Lerp(targetRoot.Position, alpha)
-			
-			local stepBox = Instance.new("Part")
-			stepBox.Name = "PathStep"
-			stepBox.Size = Vector3.new(1.2, 1.2, 1.2)
-			stepBox.Position = calculatedPos + Vector3.new(0, 0.6, 0)
-			stepBox.Color = Color3.fromRGB(255, 0, 0)
-			stepBox.Material = Enum.Material.Neon
-			stepBox.Transparency = 0
-			stepBox.Anchored = true
-			stepBox.CanCollide = false
-			stepBox.CastShadow = false
-			stepBox.TopSurface = Enum.SurfaceType.Smooth
-			stepBox.BottomSurface = Enum.SurfaceType.Smooth
-			stepBox.Parent = visualFolder
-		end
+_G.ClearVisualMarkers = function()
+	targetHighlight.Enabled = false
+	targetHighlight.Adornee = nil
+	targetBox.Transparency = 1
+	for _, p in ipairs(trailPool) do
+		p.Transparency = 1
 	end
 end
 
 ----------------------------------------------------------------
--- 6. ASYNC NAVIGATION LOOP OPERATIONS
+-- 5. ZERO-LAG OBJECT POOLING VISUAL PASS
+----------------------------------------------------------------
+_G.RenderVisualPath = function()
+	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
+	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
+	
+	if not targetCharacter or not targetCharacter:FindFirstChild("HumanoidRootPart") or not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then
+		_G.ClearVisualMarkers()
+		return 
+	end
+	
+	local myRoot = myCharacter.HumanoidRootPart
+	local targetRoot = targetCharacter.HumanoidRootPart
+
+	-- 1. Enable Highlight and update Target Cube location without creating new ones
+	targetHighlight.Adornee = targetCharacter
+	targetHighlight.Enabled = true
+	targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
+	targetBox.Transparency = 0
+
+	-- 2. Position the Trail nodes dynamically out of our fixed object pool
+	local poolIndex = 1
+	if #_G.ActiveWaypoints > 0 then
+		local lastPlacedPos = nil
+		for i = currentWaypointIndex, #_G.ActiveWaypoints do
+			if poolIndex > 15 then break end
+			local wp = _G.ActiveWaypoints[i]
+			
+			if not lastPlacedPos or (wp.Position - lastPlacedPos).Magnitude >= 4 then
+				lastPlacedPos = wp.Position
+				local node = trailPool[poolIndex]
+				node.Position = wp.Position + Vector3.new(0, 0.6, 0)
+				node.Transparency = 0
+				poolIndex = poolIndex + 1
+			end
+		end
+	else
+		-- Fallback to straight line vector ticks if client pathfinding array returns empty
+		local directDistance = (targetRoot.Position - myRoot.Position).Magnitude
+		local segments = math.min(math.floor(directDistance / 4), 15)
+		
+		for i = 1, segments do
+			local alpha = i / segments
+			local node = trailPool[poolIndex]
+			node.Position = myRoot.Position:Lerp(targetRoot.Position, alpha) + Vector3.new(0, 0.6, 0)
+			node.Transparency = 0
+			poolIndex = poolIndex + 1
+		end
+	end
+
+	-- Hide remaining parts in the pool that aren't currently needed
+	for i = poolIndex, 15 do
+		trailPool[i].Transparency = 1
+	end
+end
+
+----------------------------------------------------------------
+-- 6. NAVIGATION OPERATIONS LOOPS
 ----------------------------------------------------------------
 local function computeNewPath(startPos, targetPos)
 	local path = PathfindingService:CreatePath({
@@ -350,7 +361,7 @@ local function computeNewPath(startPos, targetPos)
 	if success and path.Status == Enum.PathStatus.Success then
 		_G.ActiveWaypoints = path:GetWaypoints()
 	else
-		_G.ActiveWaypoints = {} -- Force fallback rendering tracking behavior
+		_G.ActiveWaypoints = {}
 	end
 	currentWaypointIndex = 1
 	_G.RenderVisualPath()
@@ -379,13 +390,12 @@ local function autoRunLoop()
 				lastPathUpdateTime = now
 				computeNewPath(rootPart.Position, targetRoot.Position)
 			else
-				local trackingMarker = visualFolder:FindFirstChild("TargetMarker")
-				if trackingMarker then
-					trackingMarker.Position = targetRoot.Position + Vector3.new(0, 5, 0)
+				-- Instantly translate position frame bounds without instantiation cycles
+				if targetBox.Transparency == 0 then
+					targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
 				end
 			end
 			
-			-- Handle Movements
 			if #_G.ActiveWaypoints > 0 and currentWaypointIndex <= #_G.ActiveWaypoints then
 				local nextWaypoint = _G.ActiveWaypoints[currentWaypointIndex]
 				if (rootPart.Position - nextWaypoint.Position).Magnitude < 3 then
@@ -398,7 +408,6 @@ local function autoRunLoop()
 				humanoid:MoveTo(targetRoot.Position)
 			end
 			
-			-- Combat management
 			if _G.SelectedToolName then
 				local equippedTool = character:FindFirstChild(_G.SelectedToolName)
 				if not equippedTool then
@@ -416,7 +425,7 @@ local function autoRunLoop()
 			_G.ClearVisualMarkers()
 		end
 	else
-		if #visualFolder:GetChildren() > 0 then _G.ClearVisualMarkers() end
+		_G.ClearVisualMarkers()
 	end
 end
 
@@ -428,6 +437,9 @@ if _G.KillButton then
 		if _G.LoopConnection then _G.LoopConnection:Disconnect() end
 		if _G.InputConnection then _G.InputConnection:Disconnect() end
 		_G.ClearVisualMarkers()
+		targetHighlight:Destroy()
+		targetBox:Destroy()
+		for _, p in ipairs(trailPool) do p:Destroy() end
 		local gui = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
 		if gui then gui:Destroy() end
 		print("Auto-Tracker terminated.")
