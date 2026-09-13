@@ -112,7 +112,7 @@ end)
 
 print("Part 1: Master UI loaded successfully.")
 -- ============================================================================
--- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS (DIRECT PRECISION)
+-- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS (HIGH-PRECISION)
 -- ============================================================================
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
@@ -199,22 +199,33 @@ local function getSmartCombatTarget()
 	return closestEnemy
 end
 
-local function walkToTarget(targetPosition)
-	local char, humanoid, hrp = getLocalCharacterState()
-	if not hrp or not humanoid then return end
-
+-- Global helper to render or update the green target cube seamlessly
+getgenv().UpdateTargetCubeVisual = function(position, visible)
 	local visualCube = workspace:FindFirstChild("AITargetCube")
+	if not visible then
+		if visualCube then visualCube:Destroy() end
+		return
+	end
+	
 	if not visualCube then
 		visualCube = Instance.new("Part")
 		visualCube.Name = "AITargetCube"
-		visualCube.Size = Vector3.new(1.5, 1.5, 1.5)
+		visualCube.Size = Vector3.new(1.5, 0.2, 1.5) -- Flat marker directly on the floor
 		visualCube.Anchored = true
 		visualCube.CanCollide = false
 		visualCube.Material = Enum.Material.Neon
 		visualCube.Color = Color3.fromRGB(0, 255, 120)
 		visualCube.Parent = workspace
 	end
-	visualCube.Position = targetPosition
+	visualCube.Position = position
+end
+
+local function walkToTarget(targetPosition)
+	local char, humanoid, hrp = getLocalCharacterState()
+	if not hrp or not humanoid then return end
+
+	-- Maintain visual anchor on the ground
+	getgenv().UpdateTargetCubeVisual(targetPosition, true)
 
 	local path = PathfindingService:CreatePath({AgentRadius = 2.0, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 2.5})
 	local success = pcall(function() path:ComputeAsync(hrp.Position, targetPosition) end)
@@ -222,8 +233,9 @@ local function walkToTarget(targetPosition)
 	if success and path.Status == Enum.PathStatus.Success then
 		local lastPosition = hrp.Position
 		local stuckTimer = 0
+		local waypoints = path:GetWaypoints()
 
-		for _, waypoint in ipairs(path:GetWaypoints()) do
+		for i, waypoint in ipairs(waypoints) do
 			char, humanoid, hrp = getLocalCharacterState()
 			if not config.ScriptRunning or (not config.AutoMop and not config.AutoCombat) or not hrp or not humanoid then break end
 			
@@ -237,8 +249,9 @@ local function walkToTarget(targetPosition)
 				
 				local diffVector = waypoint.Position - hrp.Position
 				
-				-- FIXED: Strict arrival threshold (1.5 studs) forcing character to be right on top of the green cube
-				if diffVector.Magnitude <= 1.5 then
+				-- FIXED: If this is the final waypoint node, force a strict 0.5-stud stomp right on the cube center
+				local arrivalDistance = (i == #waypoints) and 0.5 or 4.5
+				if diffVector.Magnitude <= arrivalDistance then
 					reachedNode = true
 					break
 				end
@@ -248,7 +261,6 @@ local function walkToTarget(targetPosition)
 				if stuckTimer >= 0.8 then
 					local distanceMoved = (hrp.Position - lastPosition).Magnitude
 					if distanceMoved <= 1.2 then
-						print("[Anti-Stuck] Railing bottleneck detected. Executing dynamic forward vault...")
 						humanoid.Jump = true
 						
 						local forwardVector = Vector3.new(diffVector.X, 0, diffVector.Z).Unit
@@ -271,8 +283,6 @@ local function walkToTarget(targetPosition)
 			end
 		end
 	end
-	
-	if visualCube then visualCube:Destroy() end
 end
 
 local function findClosestSpill()
@@ -296,9 +306,9 @@ local function findClosestSpill()
 	end
 	return closestSpill
 end
-print("Part 2: Operational core trackers loaded with direct precision configurations.")
+print("Part 2: Operational core trackers loaded with persistent visual assets.")
 -- ============================================================================
--- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS
+-- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS (PERSISTENT FIX)
 -- ============================================================================
 
 -- Dedicated helper logic to force weapon equips and exclude cleaning gear during active spikes
@@ -399,7 +409,7 @@ task.spawn(function()
 						currentTargetSpill = nil 
 						walkToTarget(targetPos)
 						
-						-- FIXED: Must be directly on top of spawner coordinates to execute key strings
+						-- FIXED: Cube visualization remains active until prompt key is fully sent
 						if (hrp.Position - targetPos).Magnitude <= 3.5 then
 							local prompt = nil
 							for _, descendant in ipairs(giver:GetDescendants()) do
@@ -417,15 +427,14 @@ task.spawn(function()
 									task.wait(0.05)
 									prompt:InputEnded(player)
 								end
-								print("[Mop Recovery] Located and triggered hidden ProximityPrompt.")
 							else
 								VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
 								task.wait(0.05)
 								VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-								print("[Mop Recovery] No prompt instance found. Attempting manual key-mash fallback.")
 							end
 							task.wait(0.4)
 						end
+						getgenv().UpdateTargetCubeVisual(nil, false) -- Clean up after pickup
 					end
 				else
 					warn("[Mop Recovery] Error: 'Double Mop Giver' path could not be located inside workspace.")
@@ -447,7 +456,7 @@ task.spawn(function()
 				
 				walkToTarget(targetPos)
 				
-				-- FIXED: Tight interaction checking forces you directly onto the green cube surface before interacting
+				-- FIXED: Target marker stays locked on the floor during the entire E-holding interaction duration
 				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= 4.0 then
 					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
 					
@@ -461,10 +470,13 @@ task.spawn(function()
 					VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
 					task.wait(0.05)
 				end
+				getgenv().UpdateTargetCubeVisual(nil, false) -- Wipe cube after puddle despauns
+			else
+				getgenv().UpdateTargetCubeVisual(nil, false) -- Fallback wipe if spill target breaks
 			end
 		end
 		task.wait(0.1)
 	end
 end)
 
-print("Part 3: Complete multi-threaded execution loops started cleanly.")
+print("Part 2: Complete multi-threaded execution loops started cleanly.")
