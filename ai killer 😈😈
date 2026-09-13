@@ -252,7 +252,7 @@ targetHighlight.Parent = workspace
 
 local targetBox = visualFolder:FindFirstChild("TargetMarker") or Instance.new("Part")
 targetBox.Name = "TargetMarker"
-targetBox.Size = Vector3.new(2, 0.2, 2) -- Flat disk plate to snap onto the floor geometry smoothly
+targetBox.Size = Vector3.new(2.2, 0.1, 2.2) -- Ultra thin flat pad layout
 targetBox.Color = Color3.fromRGB(0, 255, 0)
 targetBox.Material = Enum.Material.Neon
 targetBox.Transparency = 1 
@@ -291,21 +291,28 @@ _G.ClearVisualMarkers = function()
 end
 
 ----------------------------------------------------------------
--- 5. R6 SPECIFIC SKELETAL GROUND DETECTION UTILITY
+-- 5. ABSOLUTE R6 LIMB GROUND MATCH SOLVER
 ----------------------------------------------------------------
 local function getExactFeetPositionR6(character)
-	if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
-	local rootPart = character.HumanoidRootPart
+	if not character then return nil end
 	
-	-- R6 Specific structural limb check: Looks for Left Leg / Right Leg
-	local r6Leg = character:FindFirstChild("Left Leg") or character:FindFirstChild("Right Leg")
-	if r6Leg then
-		-- R6 legs are exactly 2 studs tall; bottom of the foot is half its height below center position
-		return r6Leg.Position - Vector3.new(0, r6Leg.Size.Y / 2, 0)
+	-- Strict R6 Limb Target Scan: Lock directly onto actual Leg BaseParts
+	local leftLeg = character:FindFirstChild("Left Leg")
+	local rightLeg = character:FindFirstChild("Right Leg")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	
+	local targetLeg = leftLeg or rightLeg
+	if targetLeg and targetLeg:IsA("BasePart") then
+		-- Mathematical Foot bottom: Position vector minus half its physical thickness scale
+		return targetLeg.Position - Vector3.new(0, targetLeg.Size.Y / 2, 0)
 	end
 	
-	-- R6 Fallback Math: In standard R6, the footprint boundary line is exactly 3 studs below HumanoidRootPart
-	return rootPart.Position - Vector3.new(0, 3, 0)
+	-- Safe backup default fallback if the folder is loading models delayed
+	if rootPart then
+		return rootPart.Position - Vector3.new(0, 3, 0)
+	end
+	
+	return nil
 end
 
 _G.RenderVisualPath = function()
@@ -324,8 +331,8 @@ _G.RenderVisualPath = function()
 		targetHighlight.Adornee = targetCharacter
 		targetHighlight.Enabled = true
 		
-		-- Align green marker exactly flat to your solved R6 ground matrix coordinates
-		targetBox.Position = trueFeetPos + Vector3.new(0, 0.1, 0) 
+		-- Place flat sheet exactly matching foot vector height plane bounds
+		targetBox.Position = trueFeetPos + Vector3.new(0, 0.05, 0) 
 		targetBox.Transparency = 0
 
 		playerAttachment.Parent = myRoot
@@ -334,7 +341,7 @@ _G.RenderVisualPath = function()
 end
 
 ----------------------------------------------------------------
--- 6. HEIGHT & DROP CHASE ENGINE LOOPS (R6 OPTIMIZED)
+-- 6. HEIGHT & DROP CHASE ENGINE LOOPS (R6 FOOT LOCK)
 ----------------------------------------------------------------
 local function autoRunLoop()
 	if not _G.IsScriptRunning then return end
@@ -356,18 +363,18 @@ local function autoRunLoop()
 			local distance = (rootPart.Position - targetRoot.Position).Magnitude
 			local verticalGap = targetRoot.Position.Y - rootPart.Position.Y
 			
-			-- 1A. HIGH GAP JUMP DETECTION
+			-- 1A. HIGH GAP DETECTION
 			if verticalGap >= VERTICAL_JUMP_THRESHOLD then
 				humanoid.Jump = true
 			
-			-- 1B. LOW GAP DROP VELOCITY COMPENSATION
+			-- 1B. LOW GAP DETECTION
 			elseif verticalGap <= VERTICAL_DROP_THRESHOLD then
 				if distance < 12 and humanoid.FloorMaterial ~= Enum.Material.Air then
 					rootPart.AssemblyLinearVelocity = (trueFeetPos - rootPart.Position).Unit * humanoid.WalkSpeed
 				end
 			end
 			
-			-- Command humanoid movement directly down to R6 footprint ground tracking vector
+			-- Command local footprint tracking steps straight to leg baseline anchors
 			humanoid:MoveTo(trueFeetPos)
 			_G.RenderVisualPath()
 			
@@ -393,19 +400,3 @@ local function autoRunLoop()
 end
 
 _G.LoopConnection = RunService.RenderStepped:Connect(autoRunLoop)
-
-if _G.KillButton then
-	_G.KillButton.MouseButton1Click:Connect(function()
-		_G.IsScriptRunning = false
-		if _G.LoopConnection then _G.LoopConnection:Disconnect() end
-		if _G.InputConnection then _G.InputConnection:Disconnect() end
-		_G.ClearVisualMarkers()
-		targetHighlight:Destroy()
-		targetBox:Destroy()
-		playerAttachment:Destroy()
-		pathBeam:Destroy()
-		local gui = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
-		if gui then gui:Destroy() end
-		print("Auto-Tracker terminated.")
-	end)
-end
