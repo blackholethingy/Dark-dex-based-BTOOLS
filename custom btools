@@ -1,0 +1,224 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local mouse = player:GetMouse()
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- 1. Global State Management
+getgenv().CustomBToolsConfig = {
+	Active = true,
+	SelectedInstance = nil,
+	HoverInstance = nil,
+	CurrentMode = "Delete", -- Modes: Delete, Move, Scale, Rotate
+	Increment = 1 -- Grid snapping metric (1 stud / 15 degrees rotation)
+}
+local config = getgenv().CustomBToolsConfig
+local btoolsConnections = {}
+
+-- Clean up any duplicate interface layouts left from past test runs
+if playerGui:FindFirstChild("BToolsDashboard") then playerGui.BToolsDashboard:Destroy() end
+if player.Backpack:FindFirstChild("Custom BTools") then player.Backpack["Custom BTools"]:Destroy() end
+if player.Character and player.Character:FindFirstChild("Custom BTools") then player.Character["Custom BTools"]:Destroy() end
+
+-- 2. Build the Control HUD Dashboard Menu
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BToolsDashboard"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 240, 0, 195)
+frame.Position = UDim2.new(0, 20, 0.4, 0)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+frame.Visible = false 
+frame.Active = true
+frame.Draggable = true
+frame.Parent = screenGui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 35)
+title.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+title.TextColor3 = Color3.fromRGB(0, 215, 255)
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 13
+title.Text = "CUSTOM BUILDING CORE"
+title.Parent = frame
+Instance.new("UICorner", title).CornerRadius = UDim.new(0, 8)
+
+local targetText = Instance.new("TextLabel")
+targetText.Size = UDim2.new(1, -20, 0, 25)
+targetText.Position = UDim2.new(0, 10, 0, 40)
+targetText.BackgroundTransparency = 1
+targetText.TextColor3 = Color3.fromRGB(200, 200, 200)
+targetText.Font = Enum.Font.SourceSans
+targetText.TextSize = 12
+targetText.TextXAlignment = Enum.TextXAlignment.Left
+targetText.Text = "Target: None Selected"
+targetText.Parent = frame
+
+local modeText = Instance.new("TextLabel")
+modeText.Size = UDim2.new(1, -20, 0, 25)
+modeText.Position = UDim2.new(0, 10, 0, 60)
+modeText.BackgroundTransparency = 1
+modeText.TextColor3 = Color3.fromRGB(0, 215, 255)
+modeText.Font = Enum.Font.SourceSansBold
+modeText.TextSize = 12
+modeText.TextXAlignment = Enum.TextXAlignment.Left
+modeText.Text = "Mode: DELETE"
+modeText.Parent = frame
+
+local instructions = Instance.new("TextLabel")
+instructions.Size = UDim2.new(1, -20, 0, 65)
+instructions.Position = UDim2.new(0, 10, 0, 85)
+instructions.BackgroundTransparency = 1
+instructions.TextColor3 = Color3.fromRGB(150, 150, 150)
+instructions.Font = Enum.Font.SourceSansItalic
+instructions.TextSize = 11
+instructions.TextWrapped = true
+instructions.TextXAlignment = Enum.TextXAlignment.Left
+instructions.Text = "Hotkeys to switch modes:\n[Z] Delete | [X] Move | [C] Scale | [V] Rotate\nUse Arrows & PgUp/PgDn to transform parts."
+instructions.Parent = frame
+
+local uninstallBtn = Instance.new("TextButton")
+uninstallBtn.Size = UDim2.new(1, -20, 0, 25)
+uninstallBtn.Position = UDim2.new(0, 10, 1, -35)
+uninstallBtn.BackgroundColor3 = Color3.fromRGB(160, 35, 35)
+uninstallBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+uninstallBtn.Font = Enum.Font.SourceSansBold
+uninstallBtn.TextSize = 12
+uninstallBtn.Text = "UNINSTALL BTOOLS"
+uninstallBtn.Parent = frame
+Instance.new("UICorner", uninstallBtn).CornerRadius = UDim.new(0, 6)
+
+-- 3. Create the Physical Inventory Tool Item
+local tool = Instance.new("Tool")
+tool.Name = "Custom BTools"
+tool.RequiresHandle = false
+tool.Parent = player.Backpack
+
+-- Visual Selection Outlining Adornment Object
+local selectionHighlight = Instance.new("SelectionBox")
+selectionHighlight.Name = "BToolsClientHighlight"
+selectionHighlight.Color3 = Color3.fromRGB(0, 255, 255) 
+selectionHighlight.LineThickness = 0.04
+selectionHighlight.Parent = camera
+
+-- 4. High-Frequency Selection Raycast Connection Loops
+table.insert(btoolsConnections, RunService.RenderStepped:Connect(function()
+	if not config.Active or not tool or tool.Parent ~= player.Character then 
+		selectionHighlight.Adornee = nil
+		return 
+	end
+	
+	local mouseRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {player.Character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	
+	local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * 500, params)
+	
+	if result and result.Instance and result.Instance:IsA("BasePart") and not result.Instance.Locked then
+		config.HoverInstance = result.Instance
+		if not config.SelectedInstance then
+			selectionHighlight.Adornee = result.Instance
+			selectionHighlight.Color3 = Color3.fromRGB(0, 255, 255)
+		end
+	else
+		config.HoverInstance = nil
+		if not config.SelectedInstance then selectionHighlight.Adornee = nil end
+	end
+end))
+
+-- Display control menu layout only while actively holding the item tool
+table.insert(btoolsConnections, tool.Equipped:Connect(function() frame.Visible = true end))
+table.insert(btoolsConnections, tool.Unequipped:Connect(function()
+	frame.Visible = false
+	config.SelectedInstance = nil
+	selectionHighlight.Adornee = nil
+end))
+
+-- Handle Tool SelectionClicks
+table.insert(btoolsConnections, mouse.Button1Down:Connect(function()
+	if tool.Parent ~= player.Character or not config.HoverInstance then return end
+	
+	config.SelectedInstance = config.HoverInstance
+	selectionHighlight.Adornee = config.SelectedInstance
+	selectionHighlight.Color3 = Color3.fromRGB(255, 170, 0) 
+	targetText.Text = "Target: " .. config.SelectedInstance.Name
+	
+	if config.CurrentMode == "Delete" then
+		config.SelectedInstance:Destroy()
+		config.SelectedInstance = nil
+		selectionHighlight.Adornee = nil
+		targetText.Text = "Target: Part Erased ✔"
+	end
+end))
+
+-- 5. Transformation Processing Engines
+local function applyTransformation(directionVector)
+	local part = config.SelectedInstance
+	if not part or not part.Parent then return end
+	
+	if config.CurrentMode == "Move" then
+		part.CFrame = part.CFrame + (directionVector * config.Increment)
+	elseif config.CurrentMode == "Scale" then
+		local newSize = part.Size + (directionVector * config.Increment)
+		if newSize.X > 0.05 and newSize.Y > 0.05 and newSize.Z > 0.05 then
+			part.Size = newSize
+		end
+	elseif config.CurrentMode == "Rotate" then
+		local rad = math.rad(config.Increment * 15) 
+		part.CFrame = part.CFrame * CFrame.Angles(directionVector.X * rad, directionVector.Y * rad, directionVector.Z * rad)
+	end
+end
+
+-- Keyboard Hotkey and Arrow Listener Framework
+table.insert(btoolsConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or tool.Parent ~= player.Character then return end
+	
+	if input.KeyCode == Enum.KeyCode.Z then
+		config.CurrentMode = "Delete"
+		modeText.Text = "Mode: DELETE (Click part)"
+	elseif input.KeyCode == Enum.KeyCode.X then
+		config.CurrentMode = "Move"
+		modeText.Text = "Mode: MOVE (Use Arrows)"
+	elseif input.KeyCode == Enum.KeyCode.C then
+		config.CurrentMode = "Scale"
+		modeText.Text = "Mode: SCALE (Use Arrows)"
+	elseif input.KeyCode == Enum.KeyCode.V then
+		config.CurrentMode = "Rotate"
+		modeText.Text = "Mode: ROTATE (Use Arrows)"
+	end
+	
+	-- Directional Transform Router
+	if config.SelectedInstance then
+		if input.KeyCode == Enum.KeyCode.Up then
+			applyTransformation(Vector3.new(0, 0, -1))
+		elseif input.KeyCode == Enum.KeyCode.Down then
+			applyTransformation(Vector3.new(0, 0, 1)) 
+		elseif input.KeyCode == Enum.KeyCode.Left then
+			applyTransformation(Vector3.new(-1, 0, 0))
+		elseif input.KeyCode == Enum.KeyCode.Right then
+			applyTransformation(Vector3.new(1, 0, 0)) 
+		elseif input.KeyCode == Enum.KeyCode.PageUp then
+			applyTransformation(Vector3.new(0, 1, 0)) 
+		elseif input.KeyCode == Enum.KeyCode.PageDown then
+			applyTransformation(Vector3.new(0, -1, 0))
+		end
+	end
+end))
+
+-- 6. Safe System Cleaning Uninstallation Callback
+uninstallBtn.MouseButton1Click:Connect(function()
+	config.Active = false
+	for _, conn in ipairs(btoolsConnections) do if conn then conn:Disconnect() end end
+	btoolsConnections = {}
+	if selectionHighlight then selectionHighlight:Destroy() end
+	if screenGui then screenGui:Destroy() end
+	if tool then tool:Destroy() end
+	print("SUCCESS: Custom client BTools safely uninstalled.")
+end)
