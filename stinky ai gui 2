@@ -113,7 +113,7 @@ killButton.MouseButton1Click:Connect(function()
 	print("GUI Core uninstalled.")
 end)
 
-print("Part 1: UI Framework built and ready.")
+print("Part 1: UI Framework successfully initialized.")
 -- ============================================================================
 -- PART 2: CORE STATE ENGINE, VISUAL ANCHORS & PATHFINDERS
 -- ============================================================================
@@ -147,6 +147,26 @@ getgenv().getMopGiverAsset = function()
 	local under = fac and fac:FindFirstChild("UndergroundFacility")
 	local cafe = under and under:FindFirstChild("CafeGrid")
 	return cafe and cafe:FindFirstChild("Double Mop Giver")
+end
+
+-- FIXED: Target exact nested spawner container directory matching provided pathing arguments
+getgenv().getWashingMachineAssetPrompt = function()
+	local map = workspace:FindFirstChild("A_MAP")
+	local infra = map and map:FindFirstChild("Infrastructure")
+	local fac = infra and infra:FindFirstChild("Facility")
+	local under = fac and fac:FindFirstChild("UndergroundFacility")
+	local patient = under and under:FindFirstChild("Patient Area")
+	local laundromat = patient and patient:FindFirstChild("Laundromat")
+	local machines = laundromat and laundromat:FindFirstChild("WashingMachines")
+	
+	if machines then
+		-- Safely access the 20th index item dynamically allocated in the children array
+		local targetMachine = machines:GetChildren()[20]
+		local door = targetMachine and targetMachine:FindFirstChild("Door")
+		local handle = door and door:FindFirstChild("Handle")
+		return handle and handle:FindFirstChildWhichIsA("ProximityPrompt", true)
+	end
+	return nil
 end
 
 -- Dynamic visual asset and hostile tool filter engine
@@ -429,32 +449,62 @@ task.spawn(function()
 		if not character or not humanoid or not hrp then task.wait(0.5) continue end
 		if config.AutoCombat and getgenv().getSmartCombatTarget() then task.wait(0.2) continue end
 
-		-- 1. LAUNDRY DISPATCH HARVEST ENGINE
+		-- 1. LAUNDRY HARVEST & DELIVERY AUTO ENGINE
 		if config.AutoLaundry then
-			currentTargetLaundry = getgenv().FindClosestLaundryPile()
-			if currentTargetLaundry and currentTargetLaundry.Parent then
-				local targetPos = currentTargetLaundry:IsA("BasePart") and currentTargetLaundry.Position or currentTargetLaundry:GetPivot().Position
-				getgenv().walkToTarget(targetPos)
-				
-				if currentTargetLaundry and currentTargetLaundry.Parent and (hrp.Position - targetPos).Magnitude <= 3.5 then
-					local prompt = currentTargetLaundry:FindFirstChildWhichIsA("ProximityPrompt", true)
-					if fireproximityprompt and prompt then fireproximityprompt(prompt) else
-						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-						task.wait(0.05) VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-					end
-					task.wait(0.2)
+			local backpack = game:GetService("Players").LocalPlayer:FindFirstChild("Backpack")
+			-- Capacity inventory verification token: scan storage for existing clothing tools
+			local inventoryLaundry = backpack and backpack:FindFirstChild("Carried Laundry") or character:FindFirstChild("Carried Laundry")
+			
+			if inventoryLaundry then
+				-- INVENTORY FULL STATE: Enforce direct delivery route vectors to Laundromat Machine #20
+				local machinePrompt = getgenv().getWashingMachineAssetPrompt()
+				if machinePrompt and machinePrompt.Parent then
+					local machinePos = machinePrompt.Parent.Position
+					getgenv().walkToTarget(machinePos)
 					
-					local adaptiveTimeout = 0
-					while currentTargetLaundry and currentTargetLaundry.Parent and adaptiveTimeout < 12.0 do
-						getgenv().solveMovingRedZoneMinigame(currentTargetLaundry)
-						RunService.PostSimulation:Wait()
-						adaptiveTimeout = adaptiveTimeout + 0.015
-						if config.AutoCombat and getgenv().getSmartCombatTarget() then break end
+					-- Force strict 0.5-stud park coordinates right on the cube before firing prompts
+					if (hrp.Position - machinePos).Magnitude <= 3.5 then
+						if fireproximityprompt then
+							fireproximityprompt(machinePrompt)
+						else
+							machinePrompt:InputBegan(game:GetService("Players").LocalPlayer)
+							task.wait(0.05)
+							machinePrompt:InputEnded(game:GetService("Players").LocalPlayer)
+						end
+						task.wait(0.4) -- Cycle block delay allows inventory clearing to register
 					end
+				else
+					warn("[Auto-Laundry] Error: Laundromat Machine Prompt reference path broken inside workspace.")
+					task.wait(1)
 				end
 				getgenv().UpdateTargetCubeVisual(nil, false)
 			else
-				getgenv().UpdateTargetCubeVisual(nil, false) task.wait(0.2)
+				-- INVENTORY EMPTY STATE: Run standard harvest pile scanning routines
+				currentTargetLaundry = getgenv().FindClosestLaundryPile()
+				if currentTargetLaundry and currentTargetLaundry.Parent then
+					local targetPos = currentTargetLaundry:IsA("BasePart") and currentTargetLaundry.Position or currentTargetLaundry:GetPivot().Position
+					getgenv().walkToTarget(targetPos)
+					
+					if currentTargetLaundry and currentTargetLaundry.Parent and (hrp.Position - targetPos).Magnitude <= 3.5 then
+						local prompt = currentTargetLaundry:FindFirstChildWhichIsA("ProximityPrompt", true)
+						if fireproximityprompt and prompt then fireproximityprompt(prompt) else
+							VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+							task.wait(0.05) VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+						end
+						task.wait(0.2)
+						
+						local adaptiveTimeout = 0
+						while currentTargetLaundry and currentTargetLaundry.Parent and adaptiveTimeout < 12.0 do
+							getgenv().solveMovingRedZoneMinigame(currentTargetLaundry)
+							RunService.PostSimulation:Wait()
+							adaptiveTimeout = adaptiveTimeout + 0.015
+							if config.AutoCombat and getgenv().getSmartCombatTarget() then break end
+						end
+					end
+					getgenv().UpdateTargetCubeVisual(nil, false)
+				else
+					getgenv().UpdateTargetCubeVisual(nil, false) task.wait(0.2)
+				end
 			end
 
 		-- 2. JANITOR MOP ENGINE
