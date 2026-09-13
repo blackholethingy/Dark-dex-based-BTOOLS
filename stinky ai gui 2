@@ -113,7 +113,7 @@ killButton.MouseButton1Click:Connect(function()
 	print("GUI Core uninstalled.")
 end)
 
-print("Part 1: UI Framework successfully initialized.")
+print("Part 1: UI Dashboard successfully deployed.")
 -- ============================================================================
 -- PART 2: CORE STATE ENGINE, VISUAL ANCHORS & PATHFINDERS
 -- ============================================================================
@@ -149,7 +149,7 @@ getgenv().getMopGiverAsset = function()
 	return cafe and cafe:FindFirstChild("Double Mop Giver")
 end
 
--- FIXED: Target exact nested spawner container directory matching provided pathing arguments
+-- Fixed directory targeting for Machine #20 child pools
 getgenv().getWashingMachineAssetPrompt = function()
 	local map = workspace:FindFirstChild("A_MAP")
 	local infra = map and map:FindFirstChild("Infrastructure")
@@ -160,9 +160,9 @@ getgenv().getWashingMachineAssetPrompt = function()
 	local machines = laundromat and laundromat:FindFirstChild("WashingMachines")
 	
 	if machines then
-		-- Safely access the 20th index item dynamically allocated in the children array
-		local targetMachine = machines:GetChildren()[20]
-		local door = targetMachine and targetMachine:FindFirstChild("Door")
+		local children = machines:GetChildren()
+		local machine20 = children[20]
+		local door = machine20 and machine20:FindFirstChild("Door")
 		local handle = door and door:FindFirstChild("Handle")
 		return handle and handle:FindFirstChildWhichIsA("ProximityPrompt", true)
 	end
@@ -329,7 +329,7 @@ getgenv().FindClosestLaundryPile = function()
 	end
 	return closestPile
 end
-print("Part 2: Core state engine loaded.")
+print("Part 2: State trackers loaded successfully.")
 -- ============================================================================
 -- PART 3: COMBAT PROCESSORS & ADAPTIVE QTE LAUNDRY SOLVER
 -- ============================================================================
@@ -434,7 +434,7 @@ getgenv().solveMovingRedZoneMinigame = function(laundryAsset)
 	end
 	return minigameInterfaceFound
 end
-print("Part 3: Combat and laundry solvers active.")
+print("Part 3: Advanced solver loop compiled.")
 -- ============================================================================
 -- PART 4: JANITORIAL LOOPS & MASTER WORK DISPATCHER
 -- ============================================================================
@@ -451,18 +451,23 @@ task.spawn(function()
 
 		-- 1. LAUNDRY HARVEST & DELIVERY AUTO ENGINE
 		if config.AutoLaundry then
-			local backpack = game:GetService("Players").LocalPlayer:FindFirstChild("Backpack")
-			-- Capacity inventory verification token: scan storage for existing clothing tools
-			local inventoryLaundry = backpack and backpack:FindFirstChild("Carried Laundry") or character:FindFirstChild("Carried Laundry")
 			
-			if inventoryLaundry then
-				-- INVENTORY FULL STATE: Enforce direct delivery route vectors to Laundromat Machine #20
+			-- FIXED: Targets the exact hardcoded avatar character folder path to verify laundry capacity limits
+			local holdingLaundry = false
+			local charactersFolder = workspace:FindFirstChild("Characters")
+			local avatarContainer = charactersFolder and charactersFolder:FindFirstChild("AIgettingknowledge")
+			
+			if avatarContainer and avatarContainer:FindFirstChild("CarriedLaundry") then
+				holdingLaundry = true
+			end
+			
+			if holdingLaundry then
+				-- INVENTORY FULL STATE: Ignore floor items, step right onto washing machine coordinates
 				local machinePrompt = getgenv().getWashingMachineAssetPrompt()
 				if machinePrompt and machinePrompt.Parent then
 					local machinePos = machinePrompt.Parent.Position
 					getgenv().walkToTarget(machinePos)
 					
-					-- Force strict 0.5-stud park coordinates right on the cube before firing prompts
 					if (hrp.Position - machinePos).Magnitude <= 3.5 then
 						if fireproximityprompt then
 							fireproximityprompt(machinePrompt)
@@ -471,15 +476,15 @@ task.spawn(function()
 							task.wait(0.05)
 							machinePrompt:InputEnded(game:GetService("Players").LocalPlayer)
 						end
-						task.wait(0.4) -- Cycle block delay allows inventory clearing to register
+						task.wait(0.6) -- Small delay ensures the server registers the item drop
 					end
 				else
-					warn("[Auto-Laundry] Error: Laundromat Machine Prompt reference path broken inside workspace.")
+					warn("[Auto-Laundry] Error: Laundromat Machine Prompt path could not be mapped.")
 					task.wait(1)
 				end
 				getgenv().UpdateTargetCubeVisual(nil, false)
 			else
-				-- INVENTORY EMPTY STATE: Run standard harvest pile scanning routines
+				-- INVENTORY EMPTY STATE: Execute clothing pile target search loop
 				currentTargetLaundry = getgenv().FindClosestLaundryPile()
 				if currentTargetLaundry and currentTargetLaundry.Parent then
 					local targetPos = currentTargetLaundry:IsA("BasePart") and currentTargetLaundry.Position or currentTargetLaundry:GetPivot().Position
@@ -560,4 +565,4 @@ task.spawn(function()
 		task.wait(0.1)
 	end
 end)
-print("Part 4: Master work threads deployed.")
+print("Part 4: Master runtime configuration fully deployed.")
