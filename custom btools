@@ -1,501 +1,356 @@
--- PART 1: Core GUI & Target Box Configuration
+-- PART 1: Main Framework, Toolbar Panels, & Adornment Setup
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-local camera = workspace.CurrentCamera
 
--- Global Configuration State Map
-getgenv().CustomBToolsConfig = {
-	Active = true,
-	SelectedInstance = nil,
-	SelectedGroup = {},
-	HoverInstance = nil,
-	CurrentMode = "Select", 
-	Increment = 1
-}
+if not player then error("LocalPlayer is unavailable.") end
+local mouse = player:GetMouse()
 
--- Clear legacy elements
-if playerGui:FindFirstChild("BToolsDashboard") then playerGui.BToolsDashboard:Destroy() end
-if player.Backpack:FindFirstChild("Custom BTools") then player.Backpack["Custom BTools"]:Destroy() end
-if player.Character and player.Character:FindFirstChild("Custom BTools") then player.Character["Custom BTools"]:Destroy() end
+-- Clean up older configurations safely from registry
+if _G.DexDraggerEngine then pcall(function() _G.DexDraggerEngine:Destroy() end) end
+if _G.DexInputConnection then pcall(function() _G.DexInputConnection:Disconnect() end) end
 
+-- Global State Setup Variables
+_G.DexActivePart = nil
+_G.DexCurrentMode = "Select"
+_G.DexCurrentShape = "Block"
+_G.DexMoveSnap = 0
+_G.DexRotateSnap = 0
+
+-- Undo System Registries
+local undoStack = {}
+local MAX_UNDO = 50
+
+getgenv().PushDexUndo = function(action)
+	table.insert(undoStack, action)
+	if #undoStack > MAX_UNDO then table.remove(undoStack, 1) end
+end
+
+getgenv().RunDexUndo = function()
+	local action = table.remove(undoStack)
+	if not action then return end
+	
+	if action.Type == "Transform" then
+		local part = action.Part
+		if part and part.Parent then
+			part.CFrame = action.CFrame
+			part.Size = action.Size
+			_G.DexActivePart = part
+			if _G.DexUpdateHandles then _G.DexUpdateHandles(part) end
+		end
+	elseif action.Type == "Create" then
+		local part = action.Part
+		if part and part.Parent then
+			if _G.DexActivePart == part then
+				_G.DexActivePart = nil
+				if _G.DexHideAllHandles then _G.DexHideAllHandles() end
+			end
+			part:Destroy()
+		end
+	elseif action.Type == "Delete" then
+		if action.Clone then
+			local restored = action.Clone:Clone()
+			restored.Parent = (action.Parent and action.Parent.Parent) and action.Parent or workspace
+			_G.DexActivePart = restored
+			if _G.DexUpdateHandles then _G.DexUpdateHandles(restored) end
+		end
+	end
+end
+
+-- Render GUI Framework Panels
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BToolsDashboard"
+screenGui.Name = "DexStudioDraggerSuite"
 screenGui.ResetOnSpawn = false
-screenGui.Parent = playerGui
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- Screen Space Drag selection box overlay
-local dragBox = Instance.new("Frame")
-dragBox.Name = "ClientDragBox"
-dragBox.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-dragBox.BackgroundTransparency = 0.8
-dragBox.BorderColor3 = Color3.fromRGB(0, 215, 255)
-dragBox.BorderSizePixel = 2
-dragBox.Visible = false
-dragBox.Parent = screenGui
+local parentGui = pcall(function() return game:GetService("CoreGui") end) and game:GetService("CoreGui") or player:WaitForChild("PlayerGui")
+screenGui.Parent = parentGui
+_G.DexDraggerEngine = screenGui
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 285)
-frame.Position = UDim2.new(0, 20, 0.35, 0)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-frame.Visible = false 
-frame.Active = true
-frame.Draggable = true
-frame.Parent = screenGui
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+local toolbar = Instance.new("Frame")
+toolbar.Name = "Toolbar"
+toolbar.Size = UDim2.new(0, 505, 0, 45)
+toolbar.Position = UDim2.new(0.5, -252, 0, 80)
+toolbar.BackgroundColor3 = Color3.fromRGB(36, 36, 36)
+toolbar.BorderSizePixel = 1
+toolbar.BorderColor3 = Color3.fromRGB(60, 60, 60)
+toolbar.Active = true
+toolbar.Draggable = true
+toolbar.Parent = screenGui
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 35)
-title.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-title.TextColor3 = Color3.fromRGB(0, 215, 255)
-title.Font = Enum.Font.SourceSansBold
-title.TextSize = 13
-title.Text = "ADVANCED SELECTION HANDLE CORE"
-title.Parent = frame
-Instance.new("UICorner", title).CornerRadius = UDim.new(0, 8)
+Instance.new("UIListLayout", toolbar).FillDirection = Enum.FillDirection.Horizontal
+toolbar.UIListLayout.Padding = UDim.new(0, 4)
+toolbar.UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+toolbar.UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
-local targetText = Instance.new("TextLabel")
-targetText.Size = UDim2.new(1, -20, 0, 25)
-targetText.Position = UDim2.new(0, 10, 0, 40)
-targetText.BackgroundTransparency = 1
-targetText.TextColor3 = Color3.fromRGB(255, 170, 0)
-targetText.Font = Enum.Font.SourceSansBold
-targetText.TextSize = 12
-targetText.TextXAlignment = Enum.TextXAlignment.Left
-targetText.Text = "Selected: None"
-targetText.Parent = frame
+local shapebar = Instance.new("Frame")
+shapebar.Name = "ShapeBar"
+shapebar.Size = UDim2.new(0, 260, 0, 35)
+shapebar.Position = UDim2.new(0.5, -130, 0, 130)
+shapebar.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
+shapebar.BorderSizePixel = 1
+shapebar.BorderColor3 = Color3.fromRGB(50, 50, 50)
+shapebar.Parent = screenGui
 
-print("Part 1 Loaded successfully.")
--- PART 2: HUD Panels & Adornment Engine Setup
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-local screenGui = player:WaitForChild("PlayerGui"):WaitForChild("BToolsDashboard")
-local frame = screenGui:WaitForChild("Frame")
-local camera = workspace.CurrentCamera
+Instance.new("UIListLayout", shapebar).FillDirection = Enum.FillDirection.Horizontal
+shapebar.UIListLayout.Padding = UDim.new(0, 4)
+shapebar.UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+shapebar.UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
-local modeText = Instance.new("TextLabel")
-modeText.Size = UDim2.new(1, -20, 0, 25)
-modeText.Position = UDim2.new(0, 10, 0, 60)
-modeText.BackgroundTransparency = 1
-modeText.TextColor3 = Color3.fromRGB(0, 215, 255)
-modeText.Font = Enum.Font.SourceSansBold
-modeText.TextSize = 12
-modeText.TextXAlignment = Enum.TextXAlignment.Left
-modeText.Text = "Mode: SELECT POINTER"
-modeText.Parent = frame
+local snapbar = Instance.new("Frame")
+snapbar.Name = "SnapBar"
+snapbar.Size = UDim2.new(0, 320, 0, 35)
+snapbar.Position = UDim2.new(0.5, -160, 0, 170)
+snapbar.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+snapbar.BorderSizePixel = 1
+snapbar.BorderColor3 = Color3.fromRGB(45, 45, 45)
+snapbar.Parent = screenGui
 
-local instructions = Instance.new("TextLabel")
-instructions.Size = UDim2.new(1, -20, 0, 60)
-instructions.Position = UDim2.new(0, 10, 0, 80)
-instructions.BackgroundTransparency = 1
-instructions.TextColor3 = Color3.fromRGB(150, 150, 150)
-instructions.Font = Enum.Font.SourceSansItalic
-instructions.TextSize = 11
-instructions.TextWrapped = true
-instructions.TextXAlignment = Enum.TextXAlignment.Left
-instructions.Text = "Hotkeys:\n[Z] Pointer | [X] Move Arrows | [C] Scale | [V] Rotate\nHold [LeftShift] + Drag Mouse to box-select parts."
-instructions.Parent = frame
+Instance.new("UIListLayout", snapbar).FillDirection = Enum.FillDirection.Horizontal
+snapbar.UIListLayout.Padding = UDim.new(0, 6)
+snapbar.UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+snapbar.UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 
--- Adornment Widgets Creation
-local moveHandles = Instance.new("Handles")
-moveHandles.Name = "BToolsMoveArrows"
-moveHandles.Color3 = Color3.fromRGB(0, 255, 255)
+-- Handle Overlay Adornments Setup
+local moveHandles = Instance.new("Handles", screenGui)
+moveHandles.Name = "MoveHandles"
+moveHandles.Style = Enum.HandlesStyle.Movement
+moveHandles.Color3 = Color3.fromRGB(0, 150, 255)
 moveHandles.Visible = false
-moveHandles.Parent = screenGui
 
-local scaleHandles = Instance.new("Handles")
-scaleHandles.Name = "BToolsScaleDots"
-scaleHandles.Color3 = Color3.fromRGB(0, 255, 100)
+local scaleHandles = Instance.new("Handles", screenGui)
+scaleHandles.Name = "ScaleHandles"
 scaleHandles.Style = Enum.HandlesStyle.Resize
+scaleHandles.Color3 = Color3.fromRGB(50, 205, 50)
 scaleHandles.Visible = false
-scaleHandles.Parent = screenGui
 
-local rotateHandles = Instance.new("ArcHandles")
-rotateHandles.Name = "BToolsRotateWheels"
-rotateHandles.Color3 = Color3.fromRGB(255, 200, 0)
+local rotateHandles = Instance.new("ArcHandles", screenGui)
+rotateHandles.Name = "RotateHandles"
+rotateHandles.Color3 = Color3.fromRGB(255, 100, 0)
 rotateHandles.Visible = false
-rotateHandles.Parent = screenGui
 
-local selectionHighlight = Instance.new("SelectionBox")
-selectionHighlight.Name = "BToolsClientHighlight"
-selectionHighlight.Color3 = Color3.fromRGB(0, 255, 255) 
-selectionHighlight.LineThickness = 0.04
-selectionHighlight.Parent = camera
-
-local uninstallBtn = Instance.new("TextButton")
-uninstallBtn.Size = UDim2.new(1, -20, 0, 30)
-uninstallBtn.Position = UDim2.new(0, 10, 1, -45)
-uninstallBtn.BackgroundColor3 = Color3.fromRGB(120, 20, 20) 
-uninstallBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-uninstallBtn.Font = Enum.Font.SourceSansBold
-uninstallBtn.TextSize = 13
-uninstallBtn.Text = "KILL BTOOLS SCRIPT"
-uninstallBtn.Parent = frame
-Instance.new("UICorner", uninstallBtn).CornerRadius = UDim.new(0, 6)
-
--- Synchronize across environment contexts
-getgenv().AsylumBToolsUI = {
-	ScreenGui = screenGui,
-	Frame = frame,
-	DragBox = screenGui:WaitForChild("ClientDragBox"),
-	TargetText = frame:WaitForChild("TextLabel"),
-	ModeText = modeText,
-	MoveHandles = moveHandles,
-	ScaleHandles = scaleHandles,
-	RotateHandles = rotateHandles,
-	SelectionHighlight = selectionHighlight,
-	UninstallButton = uninstallBtn
-}
-print("Part 2 Loaded successfully.")
--- PART 3: Interface Callbacks & Handle Math Translators
-local ui = getgenv().AsylumBToolsUI
-local config = getgenv().CustomBToolsConfig
-
-if not ui or not config then
-	warn("ERROR: Missing dependencies! Parts 1 and 2 must run first.")
-	return
+_G.DexHideAllHandles = function()
+	moveHandles.Visible = false scaleHandles.Visible = false rotateHandles.Visible = false
+	moveHandles.Adornee = nil scaleHandles.Adornee = nil rotateHandles.Adornee = nil
 end
 
-getgenv().BToolsInternalState = {
-	IsManipulating = false,
-	CurrentHandleFace = nil,
-	InitialCFrames = {},
-	InitialSizes = {},
-	ActiveHighlights = {},
-	BtoolsConnections = {}
+_G.DexUpdateHandles = function(part)
+	_G.DexHideAllHandles()
+	if not part or not part:IsA("BasePart") or not part.Parent then return end
+	if _G.DexCurrentMode == "Move" then moveHandles.Adornee = part moveHandles.Visible = true
+	elseif _G.DexCurrentMode == "Scale" then scaleHandles.Adornee = part scaleHandles.Visible = true
+	elseif _G.DexCurrentMode == "Rotate" then rotateHandles.Adornee = part rotateHandles.Visible = true end
+end
+
+print("Part 1: Studio Toolbar elements and view overlays configured successfully.")
+-- PART 2: Translation Math & Click Logic Loops Core
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local player = game:GetService("Players").LocalPlayer
+local mouse = player:GetMouse()
+local screenGui = _G.DexDraggerEngine
+
+local moveHandles = screenGui:WaitForChild("MoveHandles")
+local scaleHandles = screenGui:WaitForChild("ScaleHandles")
+local rotateHandles = screenGui:WaitForChild("RotateHandles")
+local toolbar = screenGui:WaitForChild("Toolbar")
+local shapebar = screenGui:WaitForChild("ShapeBar")
+local snapbar = screenGui:WaitForChild("SnapBar")
+
+local modeColors = {
+	Select = Color3.fromRGB(70, 70, 70),
+	Create = Color3.fromRGB(0, 120, 215),
+	Move = Color3.fromRGB(200, 50, 50),
+	Scale = Color3.fromRGB(50, 150, 50),
+	Rotate = Color3.fromRGB(200, 120, 0)
 }
 
-local state = getgenv().BToolsInternalState
-local camera = workspace.CurrentCamera
-
-local function clearGroupHighlights()
-	for _, hl in ipairs(state.ActiveHighlights) do pcall(function() hl:Destroy() end) end
-	state.ActiveHighlights = {}
+-- Mathematical Snap Calculator Function
+local function snapValue(value, snap)
+	if not snap or snap <= 0 then return value end
+	return math.round(value / snap) * snap
 end
 
-local function applyGroupHighlights()
-	clearGroupHighlights()
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {config.SelectedInstance}
-	for _, part in ipairs(targets) do
-		if part and part.Parent and part:IsA("BasePart") then
-			local hl = Instance.new("SelectionBox")
-			hl.Color3 = Color3.fromRGB(255, 170, 0)
-			hl.LineThickness = 0.03
-			hl.Adornee = part
-			hl.Parent = camera
-			table.insert(state.ActiveHighlights, hl)
+_G.DexUpdateButtonHighlights = function(activeMode)
+	for _, btn in ipairs(toolbar:GetChildren()) do
+		if btn:IsA("TextButton") and modeColors[btn.Text] then
+			btn.BackgroundColor3 = (btn.Text == activeMode) and modeColors[btn.Text] or Color3.fromRGB(45, 45, 48)
 		end
 	end
 end
 
-getgenv().UpdateBToolsHandleVisibility = function()
-	local part = config.SelectedInstance
-	if part and part.Parent and type(part) ~= "table" and config.CurrentMode ~= "Select" then
-		ui.SelectionHighlight.Adornee = part
-		ui.SelectionHighlight.Color3 = Color3.fromRGB(255, 170, 0)
-		applyGroupHighlights()
-		
-		ui.MoveHandles.Adornee = (config.CurrentMode == "Move") and part or nil
-		ui.MoveHandles.Visible = (config.CurrentMode == "Move")
-		ui.ScaleHandles.Adornee = (config.CurrentMode == "Scale") and part or nil
-		ui.ScaleHandles.Visible = (config.CurrentMode == "Scale")
-		ui.RotateHandles.Adornee = (config.CurrentMode == "Rotate") and part or nil
-		ui.RotateHandles.Visible = (config.CurrentMode == "Rotate")
-	else
-		ui.MoveHandles.Adornee = nil ui.MoveHandles.Visible = false
-		ui.ScaleHandles.Adornee = nil ui.ScaleHandles.Visible = false
-		ui.RotateHandles.Adornee = nil ui.RotateHandles.Visible = false
-		if not part then ui.SelectionHighlight.Adornee = nil clearGroupHighlights() end
+-- 1. Precision Single-Sided Scale and Move Event Handlers Logic
+local initialCFrame, initialSize
+local lastMoveDistance = 0
+
+moveHandles.MouseButton1Down:Connect(function()
+	if _G.DexActivePart then
+		initialCFrame = _G.DexActivePart.CFrame
+		getgenv().PushDexUndo({Type = "Transform", Part = _G.DexActivePart, CFrame = initialCFrame, Size = _G.DexActivePart.Size})
 	end
-end
+	lastMoveDistance = 0
+end)
 
--- Mouse Drag Track Helpers
-getgenv().StartTrackingTransforms = function()
-	state.IsManipulating = true
-	state.InitialCFrames = {}
-	state.InitialSizes = {}
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {config.SelectedInstance}
-	for _, p in ipairs(targets) do
-		if p and p.Parent and p:IsA("BasePart") then
-			state.InitialCFrames[p] = p.CFrame
-			state.InitialSizes[p] = p.Size
-		end
+moveHandles.MouseDrag:Connect(function(face, distance)
+	local part = _G.DexActivePart
+	if not part or not initialCFrame then return end
+	local snappedDist = snapValue(distance, _G.DexMoveSnap)
+	local normalIdVector = Vector3.FromNormalId(face)
+	-- Shifts CFrame position along structural world axis transforms cleanly
+	part.CFrame = initialCFrame * CFrame.new(normalIdVector * snappedDist)
+end)
+
+local lastScaleDistance = 0
+scaleHandles.MouseButton1Down:Connect(function()
+	if _G.DexActivePart then
+		initialCFrame = _G.DexActivePart.CFrame
+		initialSize = _G.DexActivePart.Size
+		getgenv().PushDexUndo({Type = "Transform", Part = _G.DexActivePart, CFrame = initialCFrame, Size = initialSize})
 	end
-end
+	lastScaleDistance = 0
+end)
 
-getgenv().StopTrackingTransforms = function()
-	state.IsManipulating = false
-	state.CurrentHandleFace = nil
-	state.InitialCFrames = {}
-	state.InitialSizes = {}
-end
-
-getgenv().ProcessHandleDragDelta = function(face, distance)
-	if not state.IsManipulating or not config.SelectedInstance then return end
-	local primary = config.SelectedInstance
-	if type(primary) == "table" or not primary:IsA("BasePart") then return end
+-- FIXED SINGLE-SIDED SCALING: Grows purely out from the pulled side while anchoring the opposite face
+scaleHandles.MouseDrag:Connect(function(face, distance)
+	local part = _G.DexActivePart
+	if not part or not initialSize or not initialCFrame then return end
 	
-	local snapDist = math.floor(distance / config.Increment + 0.5) * config.Increment
-	local normalVector = Vector3.FromNormalId(face)
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {primary}
+	local axisVector = Vector3.FromNormalId(face)
+	local snappedDist = snapValue(distance, _G.DexMoveSnap)
 	
-	if config.CurrentMode == "Move" then
-		local worldDelta = state.InitialCFrames[primary]:VectorToWorldSpace(normalVector * snapDist)
-		for _, p in ipairs(targets) do
-			if state.InitialCFrames[p] then p.CFrame = state.InitialCFrames[p] + worldDelta end
-		end
-	elseif config.CurrentMode == "Scale" then
-		local origSize = state.InitialSizes[primary]
-		local origCFrame = state.InitialCFrames[primary]
-		if origSize and origCFrame then
-			local sizeChange = normalVector * snapDist
-			local newSize = origSize + Vector3.new(math.abs(sizeChange.X), math.abs(sizeChange.Y), math.abs(sizeChange.Z))
-			if newSize.X > 0.05 and newSize.Y > 0.05 and newSize.Z > 0.05 then
-				primary.Size = newSize
-				primary.CFrame = origCFrame * CFrame.new(normalVector * (snapDist / 2))
-			end
-		end
-	elseif config.CurrentMode == "Rotate" then
-		local rad = math.rad(math.floor(math.deg(distance) / 15 + 0.5) * 15)
-		local axisVector = Vector3.FromAxis(face)
-		for _, p in ipairs(targets) do
-			if state.InitialCFrames[p] then
-				if p == primary then
-					p.CFrame = state.InitialCFrames[primary] * CFrame.fromAxisAngle(axisVector, rad)
-				else
-					local localOffset = state.InitialCFrames[primary]:ToObjectSpace(state.InitialCFrames[p])
-					local rotatedOffset = CFrame.fromAxisAngle(axisVector, rad) * localOffset
-					p.CFrame = (state.InitialCFrames[primary] * CFrame.fromAxisAngle(axisVector, rad)) * rotatedOffset
-				end
-			end
-		end
+	-- Calculate total geometric growth change variables
+	local currentChange = axisVector * snappedDist
+	local newSize = initialSize + Vector3.new(math.abs(currentChange.X), math.abs(currentChange.Y), math.abs(currentChange.Z))
+	
+	if newSize.X > 0.05 and newSize.Y > 0.05 and newSize.Z > 0.05 then
+		part.Size = newSize
+		-- Core Offset Transform: Translates root matrix coordinate centers by exactly half the growth delta 
+		-- along the normal face vector so the back edge stays locked firmly on the platform grid
+		part.CFrame = initialCFrame * CFrame.new(axisVector * (snappedDist / 2))
 	end
+end)
+
+local lastRotAngle = 0
+rotateHandles.MouseButton1Down:Connect(function()
+	if _G.DexActivePart then
+		initialCFrame = _G.DexActivePart.CFrame
+		getgenv().PushDexUndo({Type = "Transform", Part = _G.DexActivePart, CFrame = initialCFrame, Size = _G.DexActivePart.Size})
+	end
+	lastRotAngle = 0
+end)
+
+rotateHandles.MouseDrag:Connect(function(axis, relativeAngle)
+	local part = _G.DexActivePart
+	if not part or not initialCFrame then return end
+	
+	local degrees = math.deg(relativeAngle)
+	local snappedDegrees = snapValue(degrees, _G.DexRotateSnap > 0 and _G.DexRotateSnap or 15)
+	local radDelta = math.rad(snappedDegrees)
+	
+	local axisVector = Vector3.FromAxis(axis)
+	part.CFrame = initialCFrame * CFrame.fromAxisAngle(axisVector, radDelta)
+end)
+
+-- 2. Build Interface Click Buttons Factory Helper
+local function makeButton(text, parentFrame, callback)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, 85, 0, 30)
+	b.BackgroundColor3 = Color3.fromRGB(45, 45, 48)
+	b.TextColor3 = Color3.fromRGB(230, 230, 230)
+	b.Font = Enum.Font.SourceSansBold
+	b.TextSize = 13
+	b.Text = text
+	b.Parent = parentFrame
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+	b.MouseButton1Click:Connect(callback)
+	return b
 end
 
--- Wire up action panel rows
-local function createInterfaceButton(text, posZ, color, callback)
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(1, -20, 0, 30)
-	btn.Position = UDim2.new(0, 10, 0, posZ)
-	btn.BackgroundColor3 = color
-	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	btn.Font = Enum.Font.SourceSansBold
-	btn.TextSize = 12
-	btn.Text = text
-	btn.Parent = ui.Frame
-	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-	
-	btn.MouseButton1Click:Connect(function()
-		if not config.Active or (#config.SelectedGroup == 0 and not config.SelectedInstance) then 
-			ui.TargetText.Text = "Selected: NOTHING HIGHLIGHTED!"
-			return 
-		end
-		callback()
+-- Map Tools
+for mode, _ in pairs(modeColors) do
+	makeButton(mode, toolbar, function()
+		_G.DexCurrentMode = mode
+		_G.DexUpdateButtonHighlights(mode)
+		_G.DexUpdateHandles(_G.DexActivePart)
 	end)
 end
 
-createInterfaceButton("DUPLICATE CHOSEN TARGETS", 155, Color3.fromRGB(0, 160, 100), function()
-	local newGroup = {}
-	local primary = config.SelectedInstance
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {primary}
-	for _, part in ipairs(targets) do
-		pcall(function()
-			if part and part:IsA("BasePart") then
-				local clone = part:Clone()
-				clone.CFrame = part.CFrame + Vector3.new(0, part.Size.Y + 2, 0)
-				clone.Parent = part.Parent
-				table.insert(newGroup, clone)
-			end
-		end)
-	end
-	if #newGroup > 0 then
-		config.SelectedGroup = newGroup
-		config.SelectedInstance = newGroup[1]
-		getgenv().UpdateBToolsHandleVisibility()
-		ui.TargetText.Text = "Selected: Group Cloned (" .. tostring(#newGroup) .. " parts)"
+makeButton("UNDO", toolbar, function() getgenv().RunDexUndo() end)
+makeButton("DELETE", toolbar, function()
+	if _G.DexActivePart then
+		getgenv().PushDexUndo({Type = "Delete", Clone = _G.DexActivePart:Clone(), Parent = _G.DexActivePart.Parent})
+		_G.DexActivePart:Destroy()
+		_G.DexActivePart = nil
+		_G.DexHideAllHandles()
 	end
 end)
 
-createInterfaceButton("DELETE CHOSEN TARGETS", 190, Color3.fromRGB(180, 45, 45), function()
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {config.SelectedInstance}
-	for _, part in ipairs(targets) do pcall(function() part:Destroy() end) end
-	config.SelectedInstance = nil
-	config.SelectedGroup = {}
-	getgenv().UpdateBToolsHandleVisibility()
-	ui.TargetText.Text = "Selected: Group Erased ✔"
-	config.CurrentMode = "Select"
-	ui.ModeText.Text = "Mode: SELECT POINTER"
-end)
-
-print("Part 3 Loaded successfully.")
--- PART 4: Raycast Scanner Loops & Input Mapping Enforcers
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Players = game:GetService("Players")
-
-local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
-local mouse = player:GetMouse()
-
-local ui = getgenv().AsylumBToolsUI
-local config = getgenv().CustomBToolsConfig
-local state = getgenv().BToolsInternalState
-
-if not ui or not config or not state then
-	warn("ERROR: Absolute execution crash. Missing state tables from Part 3.")
-	return
+-- Map Shapes
+local shapes = {"Block", "Ball", "Cylinder", "Wedge"}
+for _, s in ipairs(shapes) do
+	local sb = makeButton(s, shapebar, function()
+		_G.DexCurrentShape = s
+		for _, child in ipairs(shapebar:GetChildren()) do
+			if child:IsA("TextButton") then child.BackgroundColor3 = (child.Text == s) and Color3.fromRGB(0, 120, 215) or Color3.fromRGB(45, 45, 48) end
+		end
+	end)
+	if s == "Block" then sb.BackgroundColor3 = Color3.fromRGB(0, 120, 215) end
 end
 
-local isDragging = false
-local dragStart = Vector2.new()
-
--- Bind handle listeners to calculation matrix functions
-table.insert(state.BtoolsConnections, ui.MoveHandles.MouseButton1Down:Connect(function(face) getgenv().StartTrackingTransforms() end))
-table.insert(state.BtoolsConnections, ui.MoveHandles.MouseDrag:Connect(function(face, distance) getgenv().ProcessHandleDragDelta(face, distance) end))
-table.insert(state.BtoolsConnections, ui.MoveHandles.MouseButton1Up:Connect(function() getgenv().StopTrackingTransforms() end))
-
-table.insert(state.BtoolsConnections, ui.ScaleHandles.MouseButton1Down:Connect(function(face) getgenv().StartTrackingTransforms() end))
-table.insert(state.BtoolsConnections, ui.ScaleHandles.MouseDrag:Connect(function(face, distance) getgenv().ProcessHandleDragDelta(face, distance) end))
-table.insert(state.BtoolsConnections, ui.ScaleHandles.MouseButton1Up:Connect(function() getgenv().StopTrackingTransforms() end))
-
-table.insert(state.BtoolsConnections, ui.RotateHandles.MouseButton1Down:Connect(function(axis) getgenv().StartTrackingTransforms() end))
-table.insert(state.BtoolsConnections, ui.RotateHandles.MouseDrag:Connect(function(axis, relativeAngle) getgenv().ProcessHandleDragDelta(axis, relativeAngle) end))
-table.insert(state.BtoolsConnections, ui.RotateHandles.MouseButton1Up:Connect(function() getgenv().StopTrackingTransforms() end))
-
--- Hotkey Listeners
-table.insert(state.BtoolsConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed or (tool and tool.Parent ~= player.Character) then return end
-	if input.KeyCode == Enum.KeyCode.Z then
-		config.CurrentMode = "Select"
-		ui.ModeText.Text = "Mode: SELECT POINTER"
-	elseif input.KeyCode == Enum.KeyCode.X then
-		config.CurrentMode = "Move"
-		ui.ModeText.Text = "Mode: MOVE ARROWS"
-	elseif input.KeyCode == Enum.KeyCode.C then
-		config.CurrentMode = "Scale"
-		ui.ModeText.Text = "Mode: SCALE DOTS"
-	elseif input.KeyCode == Enum.KeyCode.V then
-		config.CurrentMode = "Rotate"
-		ui.ModeText.Text = "Mode: ROTATE WHEELS"
-	end
-	getgenv().UpdateBToolsHandleVisibility()
-end))
-
-local tool = Instance.new("Tool")
-tool.Name = "Custom BTools"
-tool.RequiresHandle = false
-tool.Parent = player.Backpack
-
--- Render Loop Processing
-table.insert(state.BtoolsConnections, RunService.RenderStepped:Connect(function()
-	if not config.Active or not tool or tool.Parent ~= player.Character then 
-		if not config.SelectedInstance then ui.SelectionHighlight.Adornee = nil end
-		return 
-	end
-	
-	if isDragging then
-		local currentMousePos = Vector2.new(mouse.X, mouse.Y)
-		local minX = math.min(dragStart.X, currentMousePos.X)
-		local maxX = math.max(dragStart.X, currentMousePos.X)
-		local minY = math.min(dragStart.Y, currentMousePos.Y)
-		local maxY = math.max(dragStart.Y, currentMousePos.Y)
-		ui.DragBox.Position = UDim2.new(0, minX, 0, minY)
-		ui.DragBox.Size = UDim2.new(0, maxX - minX, 0, maxY - minY)
-		return
-	end
-	
-	if state.IsManipulating then return end
-	
-	local mouseRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
-	local params = RaycastParams.new()
-	params.FilterDescendantsInstances = {player.Character}
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	
-	local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * 500, params)
-	if result and result.Instance and result.Instance:IsA("BasePart") and not result.Instance.Locked then
-		config.HoverInstance = result.Instance
-		if not config.SelectedInstance then
-			ui.SelectionHighlight.Adornee = result.Instance
-			ui.SelectionHighlight.Color3 = Color3.fromRGB(0, 255, 255)
-		end
-	else
-		config.HoverInstance = nil
-		if not config.SelectedInstance then ui.SelectionHighlight.Adornee = nil end
-	end
-end))
-
-table.insert(state.BtoolsConnections, tool.Equipped:Connect(function() ui.Frame.Visible = true getgenv().UpdateBToolsHandleVisibility() end))
-table.insert(btoolsConnections, tool.Unequipped:Connect(function()
-	ui.Frame.Visible = false config.SelectedInstance = nil config.SelectedGroup = {} getgenv().UpdateBToolsHandleVisibility()
-end))
-
-table.insert(state.BtoolsConnections, mouse.Button1Down:Connect(function()
-	if tool.Parent ~= player.Character or state.IsManipulating then return end
-	
-	if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-		isDragging = true
-		dragStart = Vector2.new(mouse.X, mouse.Y)
-		ui.DragBox.Position = UDim2.new(0, dragStart.X, 0, dragStart.Y)
-		ui.DragBox.Size = UDim2.new(0, 0, 0, 0)
-		ui.DragBox.Visible = true
-		config.SelectedInstance = nil
-		config.SelectedGroup = {}
-		getgenv().UpdateBToolsHandleVisibility()
-	else
-		if not config.HoverInstance or config.SelectedInstance then return end
-		config.SelectedInstance = config.HoverInstance
-		config.SelectedGroup = {config.HoverInstance}
-		ui.TargetText.Text = "Selected: " .. config.SelectedInstance.Name
-		getgenv().UpdateBToolsHandleVisibility()
-	end
-end))
-
-table.insert(state.BtoolsConnections, mouse.Button1Up:Connect(function()
-	if not isDragging then return end
-	isDragging = false
-	ui.DragBox.Visible = false
-	
-	local dragEnd = Vector2.new(mouse.X, mouse.Y)
-	local minX = math.min(dragStart.X, dragEnd.X)
-	local maxX = math.max(dragStart.X, dragEnd.X)
-	local minY = math.min(dragStart.Y, dragEnd.Y)
-	local maxY = math.max(dragStart.Y, dragEnd.Y)
-	
-	local selectedBuffer = {}
-	for _, part in ipairs(workspace:GetDescendants()) do
-		if part:IsA("BasePart") and not part.Locked and part.Parent ~= player.Character then
-			local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
-			if onScreen then
-				if screenPos.X >= minX and screenPos.X <= maxX and screenPos.Y >= minY and screenPos.Y <= maxY then
-					table.insert(selectedBuffer, part)
-				end
+-- Map Snaps
+local moveSnaps = {0, 0.25, 1, 4}
+for _, snap in ipairs(moveSnaps) do
+	makeButton("Move: " .. tostring(snap), snapbar, function()
+		_G.DexMoveSnap = snap
+		for _, child in ipairs(snapbar:GetChildren()) do
+			if child:IsA("TextButton") and string.find(child.Text, "Move") then
+				child.BackgroundColor3 = (child.Text == "Move: " .. tostring(snap)) and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(45, 45, 48)
 			end
 		end
-	end
-	
-	if #selectedBuffer > 0 then
-		config.SelectedGroup = selectedBuffer
-		config.SelectedInstance = selectedBuffer[1]
-		ui.TargetText.Text = "Selected Group Matrix: (" .. tostring(#selectedBuffer) .. " parts)"
-	else
-		ui.TargetText.Text = "Selected: None (Box Empty)"
-	end
-	getgenv().UpdateBToolsHandleVisibility()
-end))
+	end).BackgroundColor3 = (snap == 0) and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(45, 45, 48)
+end
 
--- Force Kill Destructor
-ui.UninstallButton.MouseButton1Click:Connect(function()
-	config.Active = false
-	state.IsManipulating = false
-	for _, conn in ipairs(state.BtoolsConnections) do if conn then conn:Disconnect() end end
-	state.BtoolsConnections = {}
-	for _, hl in ipairs(state.ActiveHighlights) do pcall(function() hl:Destroy() end) end
-	if ui.SelectionHighlight then ui.SelectionHighlight:Destroy() end
-	if ui.MoveHandles then ui.MoveHandles:Destroy() end
-	if ui.ScaleHandles then ui.ScaleHandles:Destroy() end
-	if ui.RotateHandles then ui.RotateHandles:Destroy() end
-	if ui.ScreenGui then ui.ScreenGui:Destroy() end
-	if tool then tool:Destroy() end
-	print("SUCCESS: Advanced Handles Engine forced off cleanly.")
+-- 3. Unified Mouse Click Gaze Target Raycaster Selection Hooks
+_G.DexInputConnection = UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		-- Skip target resets if clicking directly on a visual handles widget
+		if moveHandles.TargetPart or scaleHandles.TargetPart or rotateHandles.TargetPart then return end
+		
+		if _G.DexCurrentMode == "Select" or _G.DexCurrentMode == "Move" or _G.DexCurrentMode == "Scale" or _G.DexCurrentMode == "Rotate" then
+			local target = mouse.Target
+			if target and not target.Locked then
+				_G.DexActivePart = target
+				_G.DexUpdateHandles(target)
+			else
+				_G.DexActivePart = nil
+				_G.DexHideAllHandles()
+			end
+			
+		elseif _G.DexCurrentMode == "Create" then
+			-- Instantiate standard primitive components seamlessly on surface boundaries
+			local spawnPos = mouse.Hit.Position + Vector3.new(0, 2, 0)
+			local newPart = Instance.new("Part")
+			newPart.Size = Vector3.new(4, 2, 4)
+			newPart.Position = spawnPos
+			newPart.Material = Enum.Material.SmoothPlastic
+			newPart.Color = Color3.fromRGB(163, 162, 165)
+			newPart.Anchored = true
+			
+			if _G.DexCurrentShape == "Ball" then newPart.Shape = Enum.PartType.Ball newPart.Size = Vector3.new(4, 4, 4)
+			elseif _G.DexCurrentShape == "Cylinder" then newPart.Shape = Enum.PartType.Cylinder newPart.Size = Vector3.new(4, 4, 4)
+			elseif _G.DexCurrentShape == "Wedge" then newPart.Size = Vector3.new(4, 4, 4) pcall(function() newPart:Destroy() newPart = Instance.new("WedgePart") newPart.Size = Vector3.new(4, 4, 4) newPart.Position = spawnPos newPart.Anchored = true end) end
+			
+			newPart.Parent = workspace
+			getgenv().PushDexUndo({Type = "Create", Part = newPart})
+			_G.DexActivePart = newPart
+			_G.DexCurrentMode = "Select"
+			_G.DexUpdateButtonHighlights("Select")
+			_G.DexUpdateHandles(newPart)
+		end
+	end
 end)
-print("Part 4 Loaded completely. Initialization complete.")
+
+_G.DexUpdateButtonHighlights("Select")
+print("Part 2: Handles tracking pipelines and undo stack processing cycles active.")
