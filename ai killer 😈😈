@@ -232,8 +232,6 @@ local localPlayer = game:GetService("Players").LocalPlayer
 local ATTACK_RANGE = 8
 local PATH_RECALC_TIME = 0.5
 local lastPathUpdateTime = 0
-_G.ActiveWaypoints = {}
-local currentWaypointIndex = 1
 
 local visualFolder = workspace:FindFirstChild("TrackerVisuals")
 if not visualFolder then
@@ -262,7 +260,7 @@ targetBox.CanCollide = false
 targetBox.CastShadow = false
 targetBox.Parent = visualFolder
 
--- Initialize only TWO attachments and ONE single beam for a straight connection line
+-- Initialize specialized GPU Attachments and a single straight target beam
 local playerOriginAttachment = Instance.new("Attachment")
 playerOriginAttachment.Name = "TrackerPlayerOriginAttachment"
 
@@ -274,7 +272,7 @@ local pathBeam = visualFolder:FindFirstChild("TrackerPathBeam") or Instance.new(
 pathBeam.Name = "TrackerPathBeam"
 pathBeam.Attachment0 = playerOriginAttachment
 pathBeam.Attachment1 = targetAttachment
-pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- Neon Red Color Sequence
+pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) 
 pathBeam.Width0 = 0.4 
 pathBeam.Width1 = 0.4 
 pathBeam.LightEmission = 1 
@@ -308,7 +306,7 @@ local function getExactFeetPositionR6(character)
 end
 
 ----------------------------------------------------------------
--- 5. REVERSED RENDERING ENGINE (ONE STRAIGHT BEAM TO TARGET)
+-- 5. VISUAL LOOP (RUNS INDEPENDENTLY ON FRAME RATE - STRAIGHT LINE)
 ----------------------------------------------------------------
 _G.RenderVisualPath = function()
 	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
@@ -326,34 +324,56 @@ _G.RenderVisualPath = function()
 		targetHighlight.Adornee = targetCharacter
 		targetHighlight.Enabled = true
 		
+		-- Lock green plate flat to floor
 		targetBox.Position = trueFeetPos + Vector3.new(0, 0.05, 0)
 		targetBox.Transparency = 0
 		
-		-- REVERSED FIXED: Discard waypoint loops for visuals completely. 
-		-- The beam maps directly from you to the target in a straight laser line.
+		-- FORCE STRAIGHT BEAM LINE: Maps from point A to point B directly
 		playerOriginAttachment.Parent = myRoot
 		pathBeam.Enabled = true
 	end
 end
 
 ----------------------------------------------------------------
--- 6. CHARACTER EXCLUSIVE PATHFINDING NAVIGATION
+-- 6. INDEPENDENT MOVEMENT ASYNC LOOP (RUNS TRUE PATHFINDING)
 ----------------------------------------------------------------
-local function computeNewPath(startPos, targetPos)
+local function followPathfindingWaypoints(character, humanoid, rootPart, trueFeetPos)
 	local path = PathfindingService:CreatePath({
 		AgentRadius = 3,
 		AgentHeight = 5,
 		AgentCanJump = true
 	})
 	
-	local success, _ = pcall(function() path:ComputeAsync(startPos, targetPos) end)
+	local success, _ = pcall(function() path:ComputeAsync(rootPart.Position, trueFeetPos) end)
 	if success and path.Status == Enum.PathStatus.Success then
-		_G.ActiveWaypoints = path:GetWaypoints()
-		currentWaypointIndex = 2 -- Begin from the next local path junction
+		local waypoints = path:GetWaypoints()
+		
+		-- Step through waypoints asynchronously without frame-rate loop interference
+		for i = 2, #waypoints do
+			-- Abort if user deselected target or killed script midway
+			if not _G.IsScriptRunning or not _G.TargetPlayer then break end
+			
+			local wp = waypoints[i]
+			local flatPlayerPos = Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z)
+			local flatWaypointPos = Vector3.new(wp.Position.X, 0, wp.Position.Z)
+			
+			if wp.Action == Enum.PathWaypointAction.Jump then 
+				humanoid.Jump = true 
+			end
+			
+			-- Tell character to walk to this corner point specifically
+			humanoid:MoveTo(wp.Position)
+			
+			-- Keep moving until character gets close to the corner point
+			while (flatPlayerPos - flatWaypointPos).Magnitude >= 2.5 and _G.IsScriptRunning and _G.TargetPlayer == game:GetService("Players"):GetPlayerFromCharacter(wp.Parent) do
+				task.wait()
+				flatPlayerPos = Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z)
+			end
+		end
 	else
-		_G.ActiveWaypoints = {}
+		-- Fallback direct command if path computation drops out
+		humanoid:MoveTo(trueFeetPos)
 	end
-	_G.RenderVisualPath()
 end
 
 local function autoRunLoop()
@@ -382,30 +402,14 @@ local function autoRunLoop()
 			local trueFeetPos = getExactFeetPositionR6(targetCharacter) or (targetRoot.Position - Vector3.new(0, 3, 0))
 			local distance = (rootPart.Position - targetRoot.Position).Magnitude
 			
+			-- Render visual straight beam on every single frame tick
+			_G.RenderVisualPath()
+			
+			-- Separate the pathfinding movement thread completely from the frame update lock
 			local now = tick()
 			if now - lastPathUpdateTime > PATH_RECALC_TIME then
 				lastPathUpdateTime = now
-				computeNewPath(rootPart.Position, trueFeetPos)
-			else
-				_G.RenderVisualPath()
-			end
-			
-			-- REVERSED FIXED: The character must traverse the official pathfinding array corner-by-corner
-			if #_G.ActiveWaypoints > 0 and currentWaypointIndex <= #_G.ActiveWaypoints then
-				local nextWaypoint = _G.ActiveWaypoints[currentWaypointIndex]
-				local flatPlayerPos = Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z)
-				local flatWaypointPos = Vector3.new(nextWaypoint.Position.X, 0, nextWaypoint.Position.Z)
-				
-				if (flatPlayerPos - flatWaypointPos).Magnitude < 2.5 then
-					currentWaypointIndex = currentWaypointIndex + 1 -- Step to the next obstacle corner node
-				else
-					if nextWaypoint.Action == Enum.PathWaypointAction.Jump then 
-						humanoid.Jump = true 
-					end
-					humanoid:MoveTo(nextWaypoint.Position) -- Move character strictly to the pathfinding node
-				end
-			else
-				humanoid:MoveTo(trueFeetPos)
+				task.spawn(followPathfindingWaypoints, character, humanoid, rootPart, trueFeetPos)
 			end
 			
 			-- Tool Weapon Activation
@@ -422,7 +426,6 @@ local function autoRunLoop()
 				end
 			end
 		else
-			_G.ActiveWaypoints = {}
 			_G.ClearVisualMarkers()
 		end
 	else
