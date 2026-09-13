@@ -1,37 +1,32 @@
+-- PART 1: UI & Handles Setup Core
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-
 local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
-local mouse = player:GetMouse()
 local playerGui = player:WaitForChild("PlayerGui")
+local camera = workspace.CurrentCamera
 
--- 1. Global State Management
+-- Global Shared State Table
 getgenv().CustomBToolsConfig = {
 	Active = true,
 	SelectedInstance = nil,
 	HoverInstance = nil,
-	CurrentMode = "Delete", -- Modes: Delete, Move, Scale, Rotate
-	Increment = 1 -- Grid snapping metric (1 stud / 15 degrees rotation)
+	CurrentMode = "Select", -- Modes: Select, Move, Scale, Rotate
+	Increment = 1
 }
-local config = getgenv().CustomBToolsConfig
-local btoolsConnections = {}
 
--- Clean up any duplicate interface layouts left from past test runs
+-- Clean up older dashboard frames
 if playerGui:FindFirstChild("BToolsDashboard") then playerGui.BToolsDashboard:Destroy() end
 if player.Backpack:FindFirstChild("Custom BTools") then player.Backpack["Custom BTools"]:Destroy() end
 if player.Character and player.Character:FindFirstChild("Custom BTools") then player.Character["Custom BTools"]:Destroy() end
 
--- 2. Build the Control HUD Dashboard Menu
+-- Build the Control HUD Dashboard Menu
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "BToolsDashboard"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 195)
-frame.Position = UDim2.new(0, 20, 0.4, 0)
+frame.Size = UDim2.new(0, 240, 0, 270)
+frame.Position = UDim2.new(0, 20, 0.35, 0)
 frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 frame.Visible = false 
 frame.Active = true
@@ -45,7 +40,7 @@ title.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
 title.TextColor3 = Color3.fromRGB(0, 215, 255)
 title.Font = Enum.Font.SourceSansBold
 title.TextSize = 13
-title.Text = "CUSTOM BUILDING CORE"
+title.Text = "ADVANCED BUILDING HANDLE CORE"
 title.Parent = frame
 Instance.new("UICorner", title).CornerRadius = UDim.new(0, 8)
 
@@ -53,11 +48,11 @@ local targetText = Instance.new("TextLabel")
 targetText.Size = UDim2.new(1, -20, 0, 25)
 targetText.Position = UDim2.new(0, 10, 0, 40)
 targetText.BackgroundTransparency = 1
-targetText.TextColor3 = Color3.fromRGB(200, 200, 200)
-targetText.Font = Enum.Font.SourceSans
+targetText.TextColor3 = Color3.fromRGB(255, 170, 0)
+targetText.Font = Enum.Font.SourceSansBold
 targetText.TextSize = 12
 targetText.TextXAlignment = Enum.TextXAlignment.Left
-targetText.Text = "Target: None Selected"
+targetText.Text = "Selected: None"
 targetText.Parent = frame
 
 local modeText = Instance.new("TextLabel")
@@ -68,11 +63,11 @@ modeText.TextColor3 = Color3.fromRGB(0, 215, 255)
 modeText.Font = Enum.Font.SourceSansBold
 modeText.TextSize = 12
 modeText.TextXAlignment = Enum.TextXAlignment.Left
-modeText.Text = "Mode: DELETE"
+modeText.Text = "Mode: SELECT POINTER"
 modeText.Parent = frame
 
 local instructions = Instance.new("TextLabel")
-instructions.Size = UDim2.new(1, -20, 0, 65)
+instructions.Size = UDim2.new(1, -20, 0, 50)
 instructions.Position = UDim2.new(0, 10, 0, 85)
 instructions.BackgroundTransparency = 1
 instructions.TextColor3 = Color3.fromRGB(150, 150, 150)
@@ -80,145 +75,269 @@ instructions.Font = Enum.Font.SourceSansItalic
 instructions.TextSize = 11
 instructions.TextWrapped = true
 instructions.TextXAlignment = Enum.TextXAlignment.Left
-instructions.Text = "Hotkeys to switch modes:\n[Z] Delete | [X] Move | [C] Scale | [V] Rotate\nUse Arrows & PgUp/PgDn to transform parts."
+instructions.Text = "Hotkeys to switch modes:\n[Z] Select | [X] Move Arrows | [C] Scale Dots | [V] Rotate Wheels"
 instructions.Parent = frame
 
-local uninstallBtn = Instance.new("TextButton")
-uninstallBtn.Size = UDim2.new(1, -20, 0, 25)
-uninstallBtn.Position = UDim2.new(0, 10, 1, -35)
-uninstallBtn.BackgroundColor3 = Color3.fromRGB(160, 35, 35)
-uninstallBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-uninstallBtn.Font = Enum.Font.SourceSansBold
-uninstallBtn.TextSize = 12
-uninstallBtn.Text = "UNINSTALL BTOOLS"
-uninstallBtn.Parent = frame
-Instance.new("UICorner", uninstallBtn).CornerRadius = UDim.new(0, 6)
+-- Handle Widgets Setup
+local moveHandles = Instance.new("Handles")
+moveHandles.Name = "BToolsMoveArrows"
+moveHandles.Color3 = Color3.fromRGB(0, 255, 255)
+moveHandles.Visible = false
+moveHandles.Parent = screenGui
 
--- 3. Create the Physical Inventory Tool Item
-local tool = Instance.new("Tool")
-tool.Name = "Custom BTools"
-tool.RequiresHandle = false
-tool.Parent = player.Backpack
+local scaleHandles = Instance.new("Handles")
+scaleHandles.Name = "BToolsScaleDots"
+scaleHandles.Color3 = Color3.fromRGB(0, 255, 100)
+scaleHandles.Style = Enum.HandlesStyle.Resize
+scaleHandles.Visible = false
+scaleHandles.Parent = screenGui
 
--- Visual Selection Outlining Adornment Object
+local rotateHandles = Instance.new("ArcHandles")
+rotateHandles.Name = "BToolsRotateWheels"
+rotateHandles.Color3 = Color3.fromRGB(255, 200, 0)
+rotateHandles.Visible = false
+rotateHandles.Parent = screenGui
+
 local selectionHighlight = Instance.new("SelectionBox")
 selectionHighlight.Name = "BToolsClientHighlight"
 selectionHighlight.Color3 = Color3.fromRGB(0, 255, 255) 
 selectionHighlight.LineThickness = 0.04
 selectionHighlight.Parent = camera
 
--- 4. High-Frequency Selection Raycast Connection Loops
+local uninstallBtn = Instance.new("TextButton")
+uninstallBtn.Size = UDim2.new(1, -20, 0, 30)
+uninstallBtn.Position = UDim2.new(0, 10, 1, -45)
+uninstallBtn.BackgroundColor3 = Color3.fromRGB(120, 20, 20) 
+uninstallBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+uninstallBtn.Font = Enum.Font.SourceSansBold
+uninstallBtn.TextSize = 13
+uninstallBtn.Text = "KILL BTOOLS SCRIPT"
+uninstallBtn.Parent = frame
+Instance.new("UICorner", uninstallBtn).CornerRadius = UDim.new(0, 6)
+
+-- Share instance references with Part 2 loop context
+getgenv().AsylumBToolsUI = {
+	ScreenGui = screenGui,
+	Frame = frame,
+	TargetText = targetText,
+	ModeText = modeText,
+	MoveHandles = moveHandles,
+	ScaleHandles = scaleHandles,
+	RotateHandles = rotateHandles,
+	SelectionHighlight = selectionHighlight,
+	UninstallButton = uninstallBtn
+}
+print("Part 1: UI and Handle layout frames compiled successfully.")
+-- PART 2: Drag Logic & Physics Interaction Core
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local mouse = player:GetMouse()
+
+local ui = getgenv().AsylumBToolsUI
+local config = getgenv().CustomBToolsConfig
+
+if not ui or not config then
+	warn("ERROR: Run Part 1 before executing Part 2 logic loops!")
+	return
+end
+
+local btoolsConnections = {}
+local tool = nil
+
+local function updateHandleAdornee()
+	local part = config.SelectedInstance
+	if part and part.Parent and config.CurrentMode ~= "Select" then
+		ui.SelectionHighlight.Adornee = part
+		ui.SelectionHighlight.Color3 = Color3.fromRGB(255, 170, 0)
+		
+		ui.MoveHandles.Adornee = (config.CurrentMode == "Move") and part or nil
+		ui.MoveHandles.Visible = (config.CurrentMode == "Move")
+		
+		ui.ScaleHandles.Adornee = (config.CurrentMode == "Scale") and part or nil
+		ui.ScaleHandles.Visible = (config.CurrentMode == "Scale")
+		
+		ui.RotateHandles.Adornee = (config.CurrentMode == "Rotate") and part or nil
+		ui.RotateHandles.Visible = (config.CurrentMode == "Rotate")
+	else
+		ui.MoveHandles.Adornee = nil ui.MoveHandles.Visible = false
+		ui.ScaleHandles.Adornee = nil ui.ScaleHandles.Visible = false
+		ui.RotateHandles.Adornee = nil ui.RotateHandles.Visible = false
+		if not part then ui.SelectionHighlight.Adornee = nil end
+	end
+end
+
+-- Arrow Drag Calculation Engine
+local lastMoveDist = 0
+table.insert(btoolsConnections, ui.MoveHandles.MouseDrag:Connect(function(face, distance)
+	local part = config.SelectedInstance
+	if not part then return end
+	local snapDist = math.floor(distance / config.Increment + 0.5) * config.Increment
+	local delta = snapDist - lastMoveDist
+	if delta ~= 0 then
+		local direction = Vector3.FromNormalId(face)
+		part.CFrame = part.CFrame * CFrame.new(direction * delta)
+		lastMoveDist = snapDist
+	end
+end))
+table.insert(btoolsConnections, ui.MoveHandles.MouseButton1Up:Connect(function() lastMoveDist = 0 end))
+
+-- Face-Aligned Scaling Engine (Opposite edge remains anchored)
+local lastScaleDist = 0
+table.insert(btoolsConnections, ui.ScaleHandles.MouseDrag:Connect(function(face, distance)
+	local part = config.SelectedInstance
+	if not part then return end
+	local snapDist = math.floor(distance / config.Increment + 0.5) * config.Increment
+	local delta = snapDist - lastScaleDist
+	
+	if delta ~= 0 then
+		local direction = Vector3.FromNormalId(face)
+		local currentSize = part.Size
+		local sizeChange = direction * delta
+		local newSize = currentSize + Vector3.new(math.abs(sizeChange.X), math.abs(sizeChange.Y), math.abs(sizeChange.Z))
+		
+		if newSize.X > 0.05 and newSize.Y > 0.05 and newSize.Z > 0.05 then
+			part.Size = newSize
+			part.CFrame = part.CFrame * CFrame.new(direction * (delta / 2))
+			lastScaleDist = snapDist
+		end
+	end
+end))
+table.insert(btoolsConnections, ui.ScaleHandles.MouseButton1Up:Connect(function() lastScaleDist = 0 end))
+
+-- Arc Rotation Wheels Engine
+local lastAngle = 0
+table.insert(btoolsConnections, ui.RotateHandles.MouseDrag:Connect(function(axis, relativeAngle)
+	local part = config.SelectedInstance
+	if not part then return end
+	local degrees = math.deg(relativeAngle)
+	local snapDegrees = math.floor(degrees / 15 + 0.5) * 15
+	local deltaRad = math.rad(snapDegrees - lastAngle)
+	
+	if deltaRad ~= 0 then
+		local axisVector = Vector3.FromAxis(axis)
+		part.CFrame = part.CFrame * CFrame.fromAxisAngle(axisVector, deltaRad)
+		lastAngle = snapDegrees
+	end
+end))
+table.insert(btoolsConnections, ui.RotateHandles.MouseButton1Up:Connect(function() lastAngle = 0 end))
+
+-- GUI Action Panel Buttons Setup
+local function createInterfaceButton(text, posZ, color, callback)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, -20, 0, 30)
+	btn.Position = UDim2.new(0, 10, 0, posZ)
+	btn.BackgroundColor3 = color
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.SourceSansBold
+	btn.TextSize = 12
+	btn.Text = text
+	btn.Parent = ui.Frame
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+	
+	btn.MouseButton1Click:Connect(function()
+		if not config.Active or not config.SelectedInstance then 
+			ui.TargetText.Text = "Selected: SELECT A PART FIRST!"
+			return 
+		end
+		callback(config.SelectedInstance)
+	end)
+end
+
+createInterfaceButton("DUPLICATE SELECTED PART", 140, Color3.fromRGB(0, 160, 100), function(part)
+	local clone = part:Clone()
+	clone.CFrame = part.CFrame + Vector3.new(part.Size.X + 1, 0, 0)
+	clone.Parent = part.Parent
+	config.SelectedInstance = clone
+	updateHandleAdornee()
+	ui.TargetText.Text = "Selected: " .. clone.Name .. " (Clone)"
+end)
+
+createInterfaceButton("DELETE SELECTED PART", 175, Color3.fromRGB(180, 45, 45), function(part)
+	part:Destroy()
+	config.SelectedInstance = nil
+	updateHandleAdornee()
+	ui.TargetText.Text = "Selected: Part Erased ✔"
+	config.CurrentMode = "Select"
+	ui.ModeText.Text = "Mode: SELECT POINTER"
+end)
+
+-- Hotkey Management Engine
+table.insert(btoolsConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or (tool and tool.Parent ~= player.Character) then return end
+	
+	if input.KeyCode == Enum.KeyCode.Z then
+		config.CurrentMode = "Select"
+		ui.ModeText.Text = "Mode: SELECT POINTER"
+	elseif input.KeyCode == Enum.KeyCode.X then
+		config.CurrentMode = "Move"
+		ui.ModeText.Text = "Mode: MOVE ARROWS"
+	elseif input.KeyCode == Enum.KeyCode.C then
+		config.CurrentMode = "Scale"
+		ui.ModeText.Text = "Mode: SCALE DOTS"
+	elseif input.KeyCode == Enum.KeyCode.V then
+		config.CurrentMode = "Rotate"
+		ui.ModeText.Text = "Mode: ROTATE WHEELS"
+	end
+	updateHandleAdornee()
+end))
+
+-- Instantiate Inventory Backpack Entry Item
+tool = Instance.new("Tool")
+tool.Name = "Custom BTools"
+tool.RequiresHandle = false
+tool.Parent = player.Backpack
+
+-- Cursor Highlight Casting Thread
 table.insert(btoolsConnections, RunService.RenderStepped:Connect(function()
 	if not config.Active or not tool or tool.Parent ~= player.Character then 
-		selectionHighlight.Adornee = nil
+		if not config.SelectedInstance then ui.SelectionHighlight.Adornee = nil end
 		return 
 	end
-	
 	local mouseRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
 	local params = RaycastParams.new()
 	params.FilterDescendantsInstances = {player.Character}
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	
 	local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * 500, params)
-	
 	if result and result.Instance and result.Instance:IsA("BasePart") and not result.Instance.Locked then
 		config.HoverInstance = result.Instance
 		if not config.SelectedInstance then
-			selectionHighlight.Adornee = result.Instance
-			selectionHighlight.Color3 = Color3.fromRGB(0, 255, 255)
+			ui.SelectionHighlight.Adornee = result.Instance
+			ui.SelectionHighlight.Color3 = Color3.fromRGB(0, 255, 255)
 		end
 	else
 		config.HoverInstance = nil
-		if not config.SelectedInstance then selectionHighlight.Adornee = nil end
+		if not config.SelectedInstance then ui.SelectionHighlight.Adornee = nil end
 	end
 end))
 
--- Display control menu layout only while actively holding the item tool
-table.insert(btoolsConnections, tool.Equipped:Connect(function() frame.Visible = true end))
+table.insert(btoolsConnections, tool.Equipped:Connect(function() ui.Frame.Visible = true updateHandleAdornee() end))
 table.insert(btoolsConnections, tool.Unequipped:Connect(function()
-	frame.Visible = false
-	config.SelectedInstance = nil
-	selectionHighlight.Adornee = nil
+	ui.Frame.Visible = false config.SelectedInstance = nil updateHandleAdornee()
 end))
 
--- Handle Tool SelectionClicks
 table.insert(btoolsConnections, mouse.Button1Down:Connect(function()
-	if tool.Parent ~= player.Character or not config.HoverInstance then return end
-	
+	if tool.Parent ~= player.Character or not config.HoverInstance or config.SelectedInstance then return end
 	config.SelectedInstance = config.HoverInstance
-	selectionHighlight.Adornee = config.SelectedInstance
-	selectionHighlight.Color3 = Color3.fromRGB(255, 170, 0) 
-	targetText.Text = "Target: " .. config.SelectedInstance.Name
-	
-	if config.CurrentMode == "Delete" then
-		config.SelectedInstance:Destroy()
-		config.SelectedInstance = nil
-		selectionHighlight.Adornee = nil
-		targetText.Text = "Target: Part Erased ✔"
-	end
+	ui.TargetText.Text = "Selected: " .. config.SelectedInstance.Name
+	updateHandleAdornee()
 end))
 
--- 5. Transformation Processing Engines
-local function applyTransformation(directionVector)
-	local part = config.SelectedInstance
-	if not part or not part.Parent then return end
-	
-	if config.CurrentMode == "Move" then
-		part.CFrame = part.CFrame + (directionVector * config.Increment)
-	elseif config.CurrentMode == "Scale" then
-		local newSize = part.Size + (directionVector * config.Increment)
-		if newSize.X > 0.05 and newSize.Y > 0.05 and newSize.Z > 0.05 then
-			part.Size = newSize
-		end
-	elseif config.CurrentMode == "Rotate" then
-		local rad = math.rad(config.Increment * 15) 
-		part.CFrame = part.CFrame * CFrame.Angles(directionVector.X * rad, directionVector.Y * rad, directionVector.Z * rad)
-	end
-end
-
--- Keyboard Hotkey and Arrow Listener Framework
-table.insert(btoolsConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed or tool.Parent ~= player.Character then return end
-	
-	if input.KeyCode == Enum.KeyCode.Z then
-		config.CurrentMode = "Delete"
-		modeText.Text = "Mode: DELETE (Click part)"
-	elseif input.KeyCode == Enum.KeyCode.X then
-		config.CurrentMode = "Move"
-		modeText.Text = "Mode: MOVE (Use Arrows)"
-	elseif input.KeyCode == Enum.KeyCode.C then
-		config.CurrentMode = "Scale"
-		modeText.Text = "Mode: SCALE (Use Arrows)"
-	elseif input.KeyCode == Enum.KeyCode.V then
-		config.CurrentMode = "Rotate"
-		modeText.Text = "Mode: ROTATE (Use Arrows)"
-	end
-	
-	-- Directional Transform Router
-	if config.SelectedInstance then
-		if input.KeyCode == Enum.KeyCode.Up then
-			applyTransformation(Vector3.new(0, 0, -1))
-		elseif input.KeyCode == Enum.KeyCode.Down then
-			applyTransformation(Vector3.new(0, 0, 1)) 
-		elseif input.KeyCode == Enum.KeyCode.Left then
-			applyTransformation(Vector3.new(-1, 0, 0))
-		elseif input.KeyCode == Enum.KeyCode.Right then
-			applyTransformation(Vector3.new(1, 0, 0)) 
-		elseif input.KeyCode == Enum.KeyCode.PageUp then
-			applyTransformation(Vector3.new(0, 1, 0)) 
-		elseif input.KeyCode == Enum.KeyCode.PageDown then
-			applyTransformation(Vector3.new(0, -1, 0))
-		end
-	end
-end))
-
--- 6. Safe System Cleaning Uninstallation Callback
-uninstallBtn.MouseButton1Click:Connect(function()
+-- Uninstall Handler Hook Link
+ui.UninstallButton.MouseButton1Click:Connect(function()
 	config.Active = false
 	for _, conn in ipairs(btoolsConnections) do if conn then conn:Disconnect() end end
 	btoolsConnections = {}
-	if selectionHighlight then selectionHighlight:Destroy() end
-	if screenGui then screenGui:Destroy() end
+	if ui.SelectionHighlight then ui.SelectionHighlight:Destroy() end
+	if ui.MoveHandles then ui.MoveHandles:Destroy() end
+	if ui.ScaleHandles then ui.ScaleHandles:Destroy() end
+	if ui.RotateHandles then ui.RotateHandles:Destroy() end
+	if ui.ScreenGui then ui.ScreenGui:Destroy() end
 	if tool then tool:Destroy() end
-	print("SUCCESS: Custom client BTools safely uninstalled.")
+	print("SUCCESS: Handles BTools framework uninstalled completely.")
 end)
+print("Part 2: Active execution logic loop mounted.")
