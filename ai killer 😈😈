@@ -103,7 +103,7 @@ _G.KillButton.TextSize = 14
 _G.KillButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
 _G.KillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 _G.KillButton.BorderSizePixel = 0
-_G.KillButton.Parent = _G.MainFrame -- FIXED LINE (No longer uses lowercase killButton)
+_G.KillButton.Parent = _G.MainFrame
 -- PART 2: FEED LIST MANIPULATIONS (Place this second)
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -236,6 +236,7 @@ local lastPathUpdateTime = 0
 _G.ActiveWaypoints = {}
 local currentWaypointIndex = 1
 
+-- Folder validation directly onto global structure layers
 local visualFolder = workspace:FindFirstChild("TrackerVisuals")
 if not visualFolder then
 	visualFolder = Instance.new("Folder")
@@ -243,6 +244,7 @@ if not visualFolder then
 	visualFolder.Parent = workspace
 end
 
+-- Create permanent visual highlight frameworks (Pooled once on load)
 local targetHighlight = workspace:FindFirstChild("TargetTrackerHighlight") or Instance.new("Highlight")
 targetHighlight.Name = "TargetTrackerHighlight"
 targetHighlight.FillColor = Color3.fromRGB(0, 255, 0)
@@ -263,47 +265,38 @@ targetBox.CanCollide = false
 targetBox.CastShadow = false
 targetBox.Parent = visualFolder
 
-local beamPool = {}
-local attachmentPool = {}
+-- Initialize specialized GPU Attachments and a single straight target beam
 local playerOriginAttachment = Instance.new("Attachment")
 playerOriginAttachment.Name = "TrackerPlayerOriginAttachment"
 
-for i = 1, 5 do
-	local att = Instance.new("Attachment")
-	att.Name = "PathAttachmentNode" .. i
-	att.Parent = targetBox 
-	attachmentPool[i] = att
-	
-	local beam = Instance.new("Beam")
-	beam.Name = "PathBeamSegment" .. i
-	beam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) 
-	beam.Width0 = 0.4
-	beam.Width1 = 0.4
-	beam.LightEmission = 1
-	beam.LightInfluence = 0
-	beam.FaceCamera = true
-	beam.Enabled = false
-	beam.Parent = visualFolder
-	beamPool[i] = beam
-end
+local targetAttachment = Instance.new("Attachment")
+targetAttachment.Name = "TrackerTargetAttachment"
+targetAttachment.Parent = targetBox
 
-beamPool.Attachment0 = playerOriginAttachment
-beamPool.Attachment1 = attachmentPool
-for i = 2, 5 do
-	beamPool[i].Attachment0 = attachmentPool[i-1]
-	beamPool[i].Attachment1 = attachmentPool[i]
-end
+local pathBeam = visualFolder:FindFirstChild("TrackerPathBeam") or Instance.new("Beam")
+pathBeam.Name = "TrackerPathBeam"
+pathBeam.Attachment0 = playerOriginAttachment
+pathBeam.Attachment1 = targetAttachment
+pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- Neon Red Color Sequence
+pathBeam.Width0 = 0.4 
+pathBeam.Width1 = 0.4 
+pathBeam.LightEmission = 1 
+pathBeam.LightInfluence = 0 
+pathBeam.Enabled = false
+pathBeam.FaceCamera = true
+pathBeam.Parent = visualFolder
 
 _G.ClearVisualMarkers = function()
 	targetHighlight.Enabled = false
 	targetHighlight.Adornee = nil
 	targetBox.Transparency = 1
+	pathBeam.Enabled = false
 	playerOriginAttachment.Parent = nil
-	for i = 1, 5 do
-		beamPool[i].Enabled = false
-	end
 end
 
+----------------------------------------------------------------
+-- 5. R6 SPECIFIC SKELETAL GROUND DETECTION UTILITY
+----------------------------------------------------------------
 local function getExactFeetPositionR6(character)
 	if not character then return nil end
 	local leftLeg = character:FindFirstChild("Left Leg")
@@ -320,6 +313,9 @@ local function getExactFeetPositionR6(character)
 	return nil
 end
 
+----------------------------------------------------------------
+-- 6. STRAIGHT GPU BEAM RENDERING ENGINE
+----------------------------------------------------------------
 _G.RenderVisualPath = function()
 	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
 	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
@@ -336,34 +332,19 @@ _G.RenderVisualPath = function()
 		targetHighlight.Adornee = targetCharacter
 		targetHighlight.Enabled = true
 		
+		-- Anchor target plate exactly to floor bounds
 		targetBox.Position = trueFeetPos + Vector3.new(0, 0.05, 0)
 		targetBox.Transparency = 0
+		
+		-- REVERSED LOGIC: The beam shoots directly from your body straight to their feet
 		playerOriginAttachment.Parent = myRoot
-
-		local beamIndex = 1
-		if #_G.ActiveWaypoints > 0 then
-			local lastPlacedPos = myRoot.Position
-			
-			for i = currentWaypointIndex, #_G.ActiveWaypoints do
-				if beamIndex > 5 then break end
-				local wp = _G.ActiveWaypoints[i]
-				
-				if (wp.Position - lastPlacedPos).Magnitude >= 4 or i == #_G.ActiveWaypoints then
-					lastPlacedPos = wp.Position
-					attachmentPool[beamIndex].WorldPosition = wp.Position + Vector3.new(0, 0.5, 0)
-					beamPool[beamIndex].Enabled = true
-					beamIndex = beamIndex + 1
-				end
-			end
-		end
-
-		for i = beamIndex, 5 do
-			attachmentPool[i].WorldPosition = targetBox.Position
-			beamPool[i].Enabled = (beamIndex == 1) 
-		end
+		pathBeam.Enabled = true
 	end
 end
 
+----------------------------------------------------------------
+-- 7. REAL PATHFINDING LAYER (CHARACTER USES THIS)
+----------------------------------------------------------------
 local function computeNewPath(startPos, targetPos)
 	local path = PathfindingService:CreatePath({
 		AgentRadius = 3,
@@ -374,7 +355,7 @@ local function computeNewPath(startPos, targetPos)
 	local success, _ = pcall(function() path:ComputeAsync(startPos, targetPos) end)
 	if success and path.Status == Enum.PathStatus.Success then
 		_G.ActiveWaypoints = path:GetWaypoints()
-		currentWaypointIndex = 2 
+		currentWaypointIndex = 2 -- Start navigation from second node
 	else
 		_G.ActiveWaypoints = {}
 	end
@@ -415,23 +396,28 @@ local function autoRunLoop()
 				_G.RenderVisualPath()
 			end
 			
+			-- REVERSED LOGIC: Character loops step-by-step through pathfinding nodes
 			if #_G.ActiveWaypoints > 0 and currentWaypointIndex <= #_G.ActiveWaypoints then
 				local nextWaypoint = _G.ActiveWaypoints[currentWaypointIndex]
 				local flatPlayerPos = Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z)
 				local flatWaypointPos = Vector3.new(nextWaypoint.Position.X, 0, nextWaypoint.Position.Z)
 				
+				-- Evaluate checkpoint reach boundaries
 				if (flatPlayerPos - flatWaypointPos).Magnitude < 2.5 then
-					currentWaypointIndex = currentWaypointIndex + 1 
+					currentWaypointIndex = currentWaypointIndex + 1 -- Step to next path node corner
 				else
+					-- Trigger jumping if obstacle meta data tags call for it
 					if nextWaypoint.Action == Enum.PathWaypointAction.Jump then 
 						humanoid.Jump = true 
 					end
 					humanoid:MoveTo(nextWaypoint.Position)
 				end
 			else
+				-- Fallback default chase direct if short array
 				humanoid:MoveTo(trueFeetPos)
 			end
 			
+			-- Stutter-Free Weapon Handling
 			if _G.SelectedToolName then
 				local equippedTool = character:FindFirstChild(_G.SelectedToolName)
 				if not equippedTool then
@@ -464,7 +450,7 @@ if _G.KillButton then
 		targetHighlight:Destroy()
 		targetBox:Destroy()
 		playerOriginAttachment:Destroy()
-		for _, b in ipairs(beamPool) do b:Destroy() end
+		pathBeam:Destroy()
 		local gui = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
 		if gui then gui:Destroy() end
 		print("Auto-Tracker terminated.")
