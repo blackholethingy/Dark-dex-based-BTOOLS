@@ -184,7 +184,6 @@ end
 _G.StopAllTracking = function()
 	_G.TargetPlayer = nil
 	_G.SelectedToolName = nil
-	_G.ActiveWaypoints = {}
 	if _G.ClearVisualMarkers then _G.ClearVisualMarkers() end
 	
 	local character = _G.GetMyCharacter and _G.GetMyCharacter()
@@ -226,15 +225,10 @@ localPlayer.Backpack.ChildRemoved:Connect(_G.UpdateToolList)
 _G.UpdatePlayerList()
 _G.UpdateToolList()
 -- PART 3: ENGINE LOOPS AND RENDER NODES (Place this third)
-local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
 local localPlayer = game:GetService("Players").LocalPlayer
 
 local ATTACK_RANGE = 8
-local PATH_RECALC_TIME = 1.0 -- Standardized to a safe interval since beam tracking is passive
-local lastPathUpdateTime = 0
-_G.ActiveWaypoints = {}
-local currentWaypointIndex = 1
 
 -- Folder validation directly onto global structure layers
 local visualFolder = workspace:FindFirstChild("TrackerVisuals")
@@ -278,10 +272,10 @@ pathBeam.Name = "TrackerPathBeam"
 pathBeam.Attachment0 = playerAttachment
 pathBeam.Attachment1 = targetAttachment
 pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- Neon Red Color Sequence
-pathBeam.Width0 = 0.5 -- Starting width at player feet
-pathBeam.Width1 = 0.5 -- Ending width at target box
-pathBeam.LightEmission = 1 -- Max brightness glow multiplier
-pathBeam.LightInfluence = 0 -- Unaffected by world lighting maps
+pathBeam.Width0 = 0.5 
+pathBeam.Width1 = 0.5 
+pathBeam.LightEmission = 1 
+pathBeam.LightInfluence = 0 
 pathBeam.Enabled = false
 pathBeam.FaceCamera = true
 pathBeam.Parent = visualFolder
@@ -295,7 +289,7 @@ _G.ClearVisualMarkers = function()
 end
 
 ----------------------------------------------------------------
--- 5. GPU RENDER BEAM CONTROL ROUTINE
+-- 5. ZERO-CALCULATION VISUAL FRAME RENDERS
 ----------------------------------------------------------------
 _G.RenderVisualPath = function()
 	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
@@ -309,41 +303,24 @@ _G.RenderVisualPath = function()
 	local myRoot = myCharacter.HumanoidRootPart
 	local targetRoot = targetCharacter.HumanoidRootPart
 
-	-- 1. Translate layout nodes smoothly
+	-- Attach highlight frame parameters
 	targetHighlight.Adornee = targetCharacter
 	targetHighlight.Enabled = true
+	
+	-- Update target green cube instantly
 	targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
 	targetBox.Transparency = 0
 
-	-- 2. Snap player attachment node directly inside your center root matrix
+	-- Anchor beam line segments via hardware rendering structures
 	playerAttachment.Parent = myRoot
-	
-	-- 3. Open visibility gates to project the neon line
 	pathBeam.Enabled = true
 end
 
 ----------------------------------------------------------------
--- 6. NAVIGATION OPERATIONS LOOPS
+-- 6. CONTINUOUS VECTOR CHASE STEP LOOPS
 ----------------------------------------------------------------
-local function computeNewPath(startPos, targetPos)
-	local path = PathfindingService:CreatePath({
-		AgentRadius = 2,
-		AgentHeight = 5,
-		AgentCanJump = true
-	})
-	
-	local success, _ = pcall(function() path:ComputeAsync(startPos, targetPos) end)
-	if success and path.Status == Enum.PathStatus.Success then
-		_G.ActiveWaypoints = path:GetWaypoints()
-	else
-		_G.ActiveWaypoints = {}
-	end
-	currentWaypointIndex = 1
-	_G.RenderVisualPath()
-end
-
 local function autoRunLoop()
-	if not isScriptRunning then return end
+	if not _G.IsScriptRunning then return end
 
 	local character = _G.GetMyCharacter and _G.GetMyCharacter()
 	if not character then return end
@@ -360,29 +337,11 @@ local function autoRunLoop()
 		if targetHumanoid and targetHumanoid.Health > 0 then
 			local distance = (rootPart.Position - targetRoot.Position).Magnitude
 			
-			local now = tick()
-			if now - lastPathUpdateTime > PATH_RECALC_TIME then
-				lastPathUpdateTime = now
-				computeNewPath(rootPart.Position, targetRoot.Position)
-			else
-				-- Continuously stick the target tracking nodes onto the frame transform pipelines
-				if targetBox.Transparency == 0 then
-					targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
-				end
-			end
+			-- 1. Direct Linear Vector Update: Zero path calculation load overhead
+			humanoid:MoveTo(targetRoot.Position)
+			_G.RenderVisualPath()
 			
-			if #_G.ActiveWaypoints > 0 and currentWaypointIndex <= #_G.ActiveWaypoints then
-				local nextWaypoint = _G.ActiveWaypoints[currentWaypointIndex]
-				if (rootPart.Position - nextWaypoint.Position).Magnitude < 3 then
-					currentWaypointIndex = currentWaypointIndex + 1
-				else
-					if nextWaypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
-					humanoid:MoveTo(nextWaypoint.Position)
-				end
-			else
-				humanoid:MoveTo(targetRoot.Position)
-			end
-			
+			-- 2. Stutter-Free Weapon Handling
 			if _G.SelectedToolName then
 				local equippedTool = character:FindFirstChild(_G.SelectedToolName)
 				if not equippedTool then
@@ -396,7 +355,6 @@ local function autoRunLoop()
 				end
 			end
 		else
-			_G.ActiveWaypoints = {}
 			_G.ClearVisualMarkers()
 		end
 	else
@@ -404,6 +362,7 @@ local function autoRunLoop()
 	end
 end
 
+-- Hook loops safely to structural frame triggers
 _G.LoopConnection = RunService.RenderStepped:Connect(autoRunLoop)
 
 if _G.KillButton then
