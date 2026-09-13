@@ -229,8 +229,8 @@ local RunService = game:GetService("RunService")
 local localPlayer = game:GetService("Players").LocalPlayer
 
 local ATTACK_RANGE = 8
-local VERTICAL_JUMP_THRESHOLD = 4  -- Target is 4+ studs higher
-local VERTICAL_DROP_THRESHOLD = -4 -- Target is 4+ studs lower
+local VERTICAL_JUMP_THRESHOLD = 4  
+local VERTICAL_DROP_THRESHOLD = -4 
 
 -- Folder validation directly onto global structure layers
 local visualFolder = workspace:FindFirstChild("TrackerVisuals")
@@ -252,10 +252,10 @@ targetHighlight.Parent = workspace
 
 local targetBox = visualFolder:FindFirstChild("TargetMarker") or Instance.new("Part")
 targetBox.Name = "TargetMarker"
-targetBox.Size = Vector3.new(2, 0.4, 2) -- Flattened into a plate shape to represent feet area cleanly
+targetBox.Size = Vector3.new(2, 0.2, 2) -- Flat disk plate to snap onto the floor geometry smoothly
 targetBox.Color = Color3.fromRGB(0, 255, 0)
 targetBox.Material = Enum.Material.Neon
-targetBox.Transparency = 1 -- Start invisible
+targetBox.Transparency = 1 
 targetBox.Anchored = true
 targetBox.CanCollide = false
 targetBox.CastShadow = false
@@ -273,9 +273,9 @@ local pathBeam = visualFolder:FindFirstChild("TrackerPathBeam") or Instance.new(
 pathBeam.Name = "TrackerPathBeam"
 pathBeam.Attachment0 = playerAttachment
 pathBeam.Attachment1 = targetAttachment
-pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- Neon Red Color Sequence
-pathBeam.Width0 = 0.5 
-pathBeam.Width1 = 0.5 
+pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) 
+pathBeam.Width0 = 0.4 
+pathBeam.Width1 = 0.4 
 pathBeam.LightEmission = 1 
 pathBeam.LightInfluence = 0 
 pathBeam.Enabled = false
@@ -291,35 +291,50 @@ _G.ClearVisualMarkers = function()
 end
 
 ----------------------------------------------------------------
--- 5. ZERO-CALCULATION VISUAL FRAME RENDERS (FEET ACCURATE)
+-- 5. R6 SPECIFIC SKELETAL GROUND DETECTION UTILITY
 ----------------------------------------------------------------
+local function getExactFeetPositionR6(character)
+	if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
+	local rootPart = character.HumanoidRootPart
+	
+	-- R6 Specific structural limb check: Looks for Left Leg / Right Leg
+	local r6Leg = character:FindFirstChild("Left Leg") or character:FindFirstChild("Right Leg")
+	if r6Leg then
+		-- R6 legs are exactly 2 studs tall; bottom of the foot is half its height below center position
+		return r6Leg.Position - Vector3.new(0, r6Leg.Size.Y / 2, 0)
+	end
+	
+	-- R6 Fallback Math: In standard R6, the footprint boundary line is exactly 3 studs below HumanoidRootPart
+	return rootPart.Position - Vector3.new(0, 3, 0)
+end
+
 _G.RenderVisualPath = function()
 	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
 	local targetCharacter = _G.GetTargetCharacter and _G.GetTargetCharacter(_G.TargetPlayer)
 	
-	if not targetCharacter or not targetCharacter:FindFirstChild("HumanoidRootPart") or not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then
+	if not targetCharacter or not myCharacter or not myCharacter:FindFirstChild("HumanoidRootPart") then
 		_G.ClearVisualMarkers()
 		return 
 	end
 	
 	local myRoot = myCharacter.HumanoidRootPart
-	local targetRoot = targetCharacter.HumanoidRootPart
-
-	-- Attach highlight outline around model frame
-	targetHighlight.Adornee = targetCharacter
-	targetHighlight.Enabled = true
+	local trueFeetPos = getExactFeetPositionR6(targetCharacter)
 	
-	-- FIXED FEET TARGET: Position the green box exactly 3 studs below HumanoidRootPart center
-	targetBox.Position = targetRoot.Position - Vector3.new(0, 3, 0)
-	targetBox.Transparency = 0
+	if trueFeetPos then
+		targetHighlight.Adornee = targetCharacter
+		targetHighlight.Enabled = true
+		
+		-- Align green marker exactly flat to your solved R6 ground matrix coordinates
+		targetBox.Position = trueFeetPos + Vector3.new(0, 0.1, 0) 
+		targetBox.Transparency = 0
 
-	-- Anchor beam line segments via hardware rendering structures
-	playerAttachment.Parent = myRoot
-	pathBeam.Enabled = true
+		playerAttachment.Parent = myRoot
+		pathBeam.Enabled = true
+	end
 end
 
 ----------------------------------------------------------------
--- 6. HEIGHT & DROP CHASE ENGINE LOOPS (FEET ACCURATE)
+-- 6. HEIGHT & DROP CHASE ENGINE LOOPS (R6 OPTIMIZED)
 ----------------------------------------------------------------
 local function autoRunLoop()
 	if not _G.IsScriptRunning then return end
@@ -337,27 +352,23 @@ local function autoRunLoop()
 		local targetHumanoid = targetCharacter:FindFirstChildOfClass("Humanoid")
 		
 		if targetHumanoid and targetHumanoid.Health > 0 then
-			-- Fixed destination tracking position: straight to target's feet base vectors
-			local destinationPosition = targetRoot.Position - Vector3.new(0, 3, 0)
+			local trueFeetPos = getExactFeetPositionR6(targetCharacter) or (targetRoot.Position - Vector3.new(0, 3, 0))
 			local distance = (rootPart.Position - targetRoot.Position).Magnitude
-			
-			-- Calculate vertical delta gap matrix (Target Y minus Player Y)
 			local verticalGap = targetRoot.Position.Y - rootPart.Position.Y
 			
-			-- 1A. HIGH GAP DETECTION: Auto-jump if climbing
+			-- 1A. HIGH GAP JUMP DETECTION
 			if verticalGap >= VERTICAL_JUMP_THRESHOLD then
 				humanoid.Jump = true
 			
-			-- 1B. LOW GAP DETECTION: Force path velocity downward if target is below you
+			-- 1B. LOW GAP DROP VELOCITY COMPENSATION
 			elseif verticalGap <= VERTICAL_DROP_THRESHOLD then
-				-- If walking directly above them, apply a slight forward push to step off ledge structures cleanly
 				if distance < 12 and humanoid.FloorMaterial ~= Enum.Material.Air then
-					rootPart.AssemblyLinearVelocity = (destinationPosition - rootPart.Position).Unit * humanoid.WalkSpeed
+					rootPart.AssemblyLinearVelocity = (trueFeetPos - rootPart.Position).Unit * humanoid.WalkSpeed
 				end
 			end
 			
-			-- Handle regular directional tracking step assignment directly to feet marker vector position
-			humanoid:MoveTo(destinationPosition)
+			-- Command humanoid movement directly down to R6 footprint ground tracking vector
+			humanoid:MoveTo(trueFeetPos)
 			_G.RenderVisualPath()
 			
 			-- 2. Stutter-Free Weapon Handling
@@ -381,7 +392,6 @@ local function autoRunLoop()
 	end
 end
 
--- Hook loops safely to structural frame triggers
 _G.LoopConnection = RunService.RenderStepped:Connect(autoRunLoop)
 
 if _G.KillButton then
