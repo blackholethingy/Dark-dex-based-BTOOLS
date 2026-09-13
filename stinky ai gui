@@ -1,0 +1,110 @@
+-- PART 1: UI & Config Core
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+getgenv().AsylumConfig = {
+	AutoMop = false,
+	AutoCombat = false,
+	SmartStrafe = true,
+	CombatRange = 16,
+	AttackReach = 4.5,
+	ScriptRunning = true
+}
+
+if playerGui:FindFirstChild("AsylumDashboard") then
+	playerGui.AsylumDashboard:Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AsylumDashboard"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 220, 0, 220)
+mainFrame.Position = UDim2.new(1, -240, 0.4, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 8)
+frameCorner.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 35)
+titleLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 14
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.Text = "ASYLUM UTILITY CORE - PART 1"
+titleLabel.Parent = mainFrame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 8)
+titleCorner.Parent = titleLabel
+
+local function createToggleButton(name, text, positionY, configKey)
+	local button = Instance.new("TextButton")
+	button.Name = name
+	button.Size = UDim2.new(1, -20, 0, 35)
+	button.Position = UDim2.new(0, 10, 0, positionY)
+	button.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
+	button.TextColor3 = Color3.fromRGB(180, 180, 180)
+	button.TextSize = 14
+	button.Font = Enum.Font.SourceSansBold
+	button.Text = text .. " [OFF]"
+	button.Parent = mainFrame
+
+	local btnCorner = Instance.new("UICorner")
+	btnCorner.CornerRadius = UDim.new(0, 6)
+	btnCorner.Parent = button
+
+	button.MouseButton1Click:Connect(function()
+		if not getgenv().AsylumConfig.ScriptRunning then return end
+		getgenv().AsylumConfig[configKey] = not getgenv().AsylumConfig[configKey]
+		local state = getgenv().AsylumConfig[configKey]
+		
+		if state then
+			button.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
+			button.TextColor3 = Color3.fromRGB(255, 255, 255)
+			button.Text = text .. " [ON]"
+		else
+			button.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
+			button.TextColor3 = Color3.fromRGB(180, 180, 180)
+			button.Text = text .. " [OFF]"
+		end
+	end)
+end
+
+createToggleButton("MopToggle", "Auto-Mop Engine", 45, "AutoMop")
+createToggleButton("CombatToggle", "Smart Auto-Combat", 90, "AutoCombat")
+createToggleButton("StrafeToggle", "Anti-Aim Strafe Loop", 135, "SmartStrafe")
+
+local killButton = Instance.new("TextButton")
+killButton.Size = UDim2.new(1, -20, 0, 35)
+killButton.Position = UDim2.new(0, 10, 0, 175)
+killButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+killButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+killButton.TextSize = 14
+killButton.Font = Enum.Font.SourceSansBold
+killButton.Text = "UNINSTALL ALL"
+killButton.Parent = mainFrame
+
+local killCorner = Instance.new("UICorner")
+killCorner.CornerRadius = UDim.new(0, 6)
+killCorner.Parent = killButton
+
+killButton.MouseButton1Click:Connect(function()
+	getgenv().AsylumConfig.ScriptRunning = false
+	getgenv().AsylumConfig.AutoMop = false
+	getgenv().AsylumConfig.AutoCombat = false
+	if screenGui then screenGui:Destroy() end
+	local visualCube = workspace:FindFirstChild("AITargetCube")
+	if visualCube then visualCube:Destroy() end
+	print("GUI Core uninstalled.")
+end)
+print("Part 1 loaded successfully.")
