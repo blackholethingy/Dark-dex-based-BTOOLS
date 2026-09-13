@@ -112,7 +112,7 @@ end)
 
 print("Part 1: Master UI loaded successfully.")
 -- ============================================================================
--- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS
+-- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS (INSTANT CLICK FIX)
 -- ============================================================================
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
@@ -162,14 +162,12 @@ local function getSmartCombatTarget()
 			if enemyHum.Health > 0 then
 				local isStaff = false
 				
-				-- 1. Scan player names and team labels directly if available
 				local teamName = p.Team and p.Team.Name or ""
 				local lowerTeam = string.lower(teamName)
 				if string.find(lowerTeam, "orderly") or string.find(lowerTeam, "guard") or string.find(lowerTeam, "epu") or string.find(lowerTeam, "staff") then
 					isStaff = true
 				end
 				
-				-- 2. Fallback check: Scan their active tools for server staff items
 				if not isStaff then
 					for _, item in ipairs(enemyChar:GetChildren()) do
 						if item:IsA("Tool") and (string.find(string.lower(item.Name), "stun") or string.find(string.lower(item.Name), "staff") or string.find(string.lower(item.Name), "taser") or string.find(string.lower(item.Name), "handcuff")) then
@@ -179,7 +177,6 @@ local function getSmartCombatTarget()
 					end
 				end
 				
-				-- 3. Fallback check: Check their backpack if tools aren't actively held
 				if not isStaff and p:FindFirstChild("Backpack") then
 					for _, item in ipairs(p.Backpack:GetChildren()) do
 						if string.find(string.lower(item.Name), "stun") or string.find(string.lower(item.Name), "staff") or string.find(string.lower(item.Name), "taser") then
@@ -219,14 +216,27 @@ local function walkToTarget(targetPosition)
 	end
 	visualCube.Position = targetPosition
 
-	local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
+	local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
 	local success = pcall(function() path:ComputeAsync(hrp.Position, targetPosition) end)
 	
 	if success and path.Status == Enum.PathStatus.Success then
+		local lastPosition = hrp.Position
+		local stuckTimer = 0
+
 		for _, waypoint in ipairs(path:GetWaypoints()) do
 			char, humanoid, hrp = getLocalCharacterState()
 			if not config.ScriptRunning or (not config.AutoMop and not config.AutoCombat) or not hrp or not humanoid then break end
-			if currentTargetSpill == nil and not getMopGiverAsset() then break end 
+			
+			-- INSTANT BREAK FIX: If we touch the spill boundary while moving, halt walking and start mopping immediately
+			if currentTargetSpill and currentTargetSpill.Parent then
+				local spillPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
+				local currentDist = (hrp.Position - spillPos).Magnitude
+				local triggerRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
+				
+				if currentDist <= triggerRange then
+					break 
+				end
+			end
 			
 			if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
 			
@@ -236,11 +246,39 @@ local function walkToTarget(targetPosition)
 				char, humanoid, hrp = getLocalCharacterState()
 				if not hrp or not humanoid then break end
 				
+				if currentTargetSpill and currentTargetSpill.Parent then
+					local spillPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
+					local currentDist = (hrp.Position - spillPos).Magnitude
+					local triggerRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
+					if currentDist <= triggerRange then break end
+				end
+				
 				local diffVector = waypoint.Position - hrp.Position
-				-- Arrival threshold set to 4.5 studs to clear wide puddle dimensions early
 				if diffVector.Magnitude <= 4.5 then
 					reachedNode = true
 					break
+				end
+				
+				-- ANTI-STUCK SYSTEM (Vault over Railings)
+				stuckTimer = stuckTimer + 0.015
+				if stuckTimer >= 0.8 then
+					local distanceMoved = (hrp.Position - lastPosition).Magnitude
+					if distanceMoved <= 1.2 then
+						print("[Anti-Stuck] Railing bottleneck detected. Executing dynamic forward vault...")
+						humanoid.Jump = true
+						
+						local forwardVector = Vector3.new(diffVector.X, 0, diffVector.Z).Unit
+						local vaultFrames = 0
+						while vaultFrames < 20 do
+							char, humanoid, hrp = getLocalCharacterState()
+							if not humanoid then break end
+							humanoid:Move(forwardVector, false)
+							RunService.PostSimulation:Wait()
+							vaultFrames = vaultFrames + 1
+						end
+					end
+					lastPosition = hrp.Position
+					stuckTimer = 0
 				end
 				
 				humanoid:Move(Vector3.new(diffVector.X, 0, diffVector.Z).Unit, false)
@@ -274,12 +312,12 @@ local function findClosestSpill()
 	end
 	return closestSpill
 end
-print("Part 2: Operational core trackers loaded.")
+print("Part 2: Operational core trackers loaded with zero-latency proximity overrides.")
 -- ============================================================================
 -- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS
 -- ============================================================================
 
--- Anti-Anti-Cheat Safe Orbit Combat Framework
+-- Anti-Anti-Cheat Safe Orbit Combat Framework Loop
 RunService.PostSimulation:Connect(function(deltaTime)
 	if not config.ScriptRunning or not config.AutoCombat then return end
 	
@@ -325,7 +363,7 @@ RunService.PostSimulation:Connect(function(deltaTime)
 	end
 end)
 
--- Dedicated Post-Death Janitorial Engine Integration Loop
+-- Dedicated Post-Death Janitorial Engine Integration Loop Thread
 task.spawn(function()
 	while config.ScriptRunning do
 		local character, humanoid, hrp = getLocalCharacterState()
@@ -351,7 +389,7 @@ task.spawn(function()
 					end
 
 					if targetPos then
-						currentTargetSpill = nil -- Suspend mopping to run tool retrieval
+						currentTargetSpill = nil 
 						walkToTarget(targetPos)
 						
 						if (hrp.Position - targetPos).Magnitude <= 8.5 then
@@ -365,7 +403,6 @@ task.spawn(function()
 							end
 							
 							if prompt then
-								-- Direct invocation if supported, otherwise input simulation
 								if fireproximityprompt then
 									fireproximityprompt(prompt)
 								else
@@ -375,7 +412,6 @@ task.spawn(function()
 								end
 								print("[Mop Recovery] Located and triggered hidden ProximityPrompt.")
 							else
-								-- Manual E key-mash fallback if prompt asset configuration can't be fetched
 								VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
 								task.wait(0.05)
 								VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
@@ -426,4 +462,4 @@ task.spawn(function()
 	end
 end)
 
-print("Part 3: Runtime loops successfully initiated.")
+print("Part 3: Complete multi-threaded execution loops started cleanly.")
