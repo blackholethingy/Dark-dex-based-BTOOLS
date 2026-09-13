@@ -1,0 +1,230 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local mouse = player:GetMouse()
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- 1. Configuration & Global State Maps
+getgenv().TacticalTorchConfig = {
+	Enabled = false,
+	Active = true,
+	Mode = 1, -- 1: Flashlight, 2: Laser Only, 3: Flashlight + Laser
+	BrightnessIndex = 4, -- Indexes into our strict step table below
+	Range = 120,
+	Angle = 70,
+	BeamColor = Color3.fromRGB(255, 245, 220)
+}
+
+-- Strict Step Table to prevent fractional math rounding bugs completely
+local BRIGHTNESS_STEPS = {0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+
+local config = getgenv().TacticalTorchConfig
+local activeConnections = {}
+
+local torchPart, spotBeam, laserAdornment, splashLightPart
+
+-- Clean up any duplicate interface layouts left from past test runs
+if playerGui:FindFirstChild("TacticalDashboard") then playerGui.TacticalDashboard:Destroy() end
+local oldModel = workspace:FindFirstChild("ClientTacticalTorch") or camera:FindFirstChild("ClientTacticalTorch") or workspace:FindFirstChild("ClientLaserSplash")
+if oldModel then oldModel:Destroy() end
+
+-- 2. Build the Control HUD Dashboard Menu
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "TacticalDashboard"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 240, 0, 115)
+frame.Position = UDim2.new(1, -260, 0.25, 0)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+frame.Active = true
+frame.Draggable = true
+frame.Parent = screenGui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 35)
+title.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 13
+title.Text = "TACTICAL SYSTEM MONITOR"
+title.Parent = frame
+Instance.new("UICorner", title).CornerRadius = UDim.new(0, 8)
+
+local statusText = Instance.new("TextLabel")
+statusText.Size = UDim2.new(1, 0, 0, 30)
+statusText.Position = UDim2.new(0, 0, 0, 35)
+statusText.BackgroundTransparency = 1
+statusText.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusText.Font = Enum.Font.SourceSans
+statusText.TextSize = 12
+statusText.Text = "F: Power | R: Switch Mode | E/Q: Bright"
+statusText.Parent = frame
+
+local modeLabel = Instance.new("TextLabel")
+modeLabel.Size = UDim2.new(1, 0, 0, 20)
+modeLabel.Position = UDim2.new(0, 0, 0, 60)
+modeLabel.BackgroundTransparency = 1
+modeLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
+modeLabel.Font = Enum.Font.SourceSansBold
+modeLabel.TextSize = 12
+modeLabel.Text = "SYSTEM STATUS: POWERED OFF"
+modeLabel.Parent = frame
+
+local killBtn = Instance.new("TextButton")
+killBtn.Size = UDim2.new(1, -20, 0, 25)
+killBtn.Position = UDim2.new(0, 10, 1, -35)
+killBtn.BackgroundColor3 = Color3.fromRGB(160, 35, 35)
+killBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+killBtn.Font = Enum.Font.SourceSansBold
+killBtn.TextSize = 12
+killBtn.Text = "UNINSTALL SYSTEM"
+killBtn.Parent = frame
+Instance.new("UICorner", killBtn).CornerRadius = UDim.new(0, 6)
+
+local function updateHUDStrings()
+	if not config.Enabled then
+		modeLabel.Text = "SYSTEM STATUS: POWERED OFF"
+		modeLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+		return
+	end
+	modeLabel.TextColor3 = Color3.fromRGB(255, 60, 60)
+	if config.Mode == 1 then modeLabel.Text = "Active Mode: FLASHLIGHT ONLY"
+	elseif config.Mode == 2 then modeLabel.Text = "Active Mode: LASER RECON"
+	elseif config.Mode == 3 then modeLabel.Text = "Active Mode: COMBINED DUAL CORE" end
+end
+
+-- 3. Construction of the Torch Layout
+local function constructTacticalEngine(char)
+	if spotBeam then pcall(function() spotBeam:Destroy() end) end
+	if laserAdornment then pcall(function() laserAdornment:Destroy() end) end
+	if splashLightPart then pcall(function() splashLightPart:Destroy() end) end
+	if torchPart then pcall(function() torchPart:Destroy() end) end
+	
+	local part = Instance.new("Part")
+	part.Name = "ClientTacticalTorch"
+	part.Size = Vector3.new(0.4, 0.4, 1.4)
+	part.Color = Color3.fromRGB(15, 15, 15)
+	part.Material = Enum.Material.SmoothPlastic
+	part.CanCollide = false
+	part.Massless = true
+	part.Anchored = true
+	part.Parent = camera 
+	
+	local spot = Instance.new("SpotLight")
+	spot.Name = "MainSpot"
+	spot.Brightness = BRIGHTNESS_STEPS[config.BrightnessIndex]
+	spot.Range = config.Range
+	spot.Angle = config.Angle
+	spot.Color = config.BeamColor
+	spot.Face = Enum.NormalId.Front
+	spot.Shadows = true
+	spot.Enabled = false
+	spot.Parent = part
+	
+	local laser = Instance.new("CylinderHandleAdornment")
+	laser.Name = "SightLaser"
+	laser.Color3 = Color3.fromRGB(255, 0, 0)
+	laser.InnerRadius = 0
+	laser.Radius = 0.025
+	laser.Transparency = 0.1
+	laser.ZIndex = 10
+	laser.Visible = false
+	laser.Adornee = part
+	laser.Parent = part
+	
+	local splashPart = Instance.new("Part")
+	splashPart.Name = "ClientLaserSplash"
+	splashPart.Size = Vector3.new(0.1, 0.1, 0.1)
+	splashPart.Transparency = 1
+	splashPart.Anchored = true
+	splashPart.CanCollide = false
+	splashPart.Parent = workspace
+	
+	local splashPointLight = Instance.new("PointLight")
+	splashPointLight.Name = "SplashLight"
+	splashPointLight.Color = Color3.fromRGB(255, 0, 0)
+	splashPointLight.Brightness = 6
+	splashPointLight.Range = 10
+	splashPointLight.Enabled = false
+	splashPointLight.Parent = splashPart
+	
+	torchPart = part
+	spotBeam = spot
+	laserAdornment = laser
+	splashLightPart = splashPart
+	
+	local renderLoop = RunService.RenderStepped:Connect(function()
+		if not config.Active or not part or not char:FindFirstChild("HumanoidRootPart") then return end
+		
+		local hrp = char.HumanoidRootPart
+		local shoulderOffset = hrp.Position + (hrp.CFrame.RightVector * 1.1) + (hrp.CFrame.UpVector * 1.3)
+		
+		local mouseRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
+		local rayParams = RaycastParams.new()
+		rayParams.FilterDescendantsInstances = {char, part, splashPart}
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		
+		local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * config.Range, rayParams)
+		local destination = result and result.Position or (mouseRay.Origin + (mouseRay.Direction * config.Range))
+		
+		part.CFrame = CFrame.new(shoulderOffset, destination)
+		
+		if config.Enabled then
+			spot.Enabled = (config.Mode == 1 or config.Mode == 3)
+			if config.Mode == 2 or config.Mode == 3 then
+				local beamLength = (shoulderOffset - destination).Magnitude
+				laser.Height = beamLength
+				laser.CFrame = CFrame.new(0, 0, -beamLength / 2)
+				laser.Visible = true
+				if result then
+					splashPart.Position = destination + (result.Normal * 0.2)
+					splashPointLight.Enabled = true
+				else splashPointLight.Enabled = false end
+			else laser.Visible = false splashPointLight.Enabled = false end
+		else spot.Enabled = false laser.Visible = false splashPointLight.Enabled = false end
+	end)
+	table.insert(activeConnections, renderLoop)
+end
+
+if player.Character then constructTacticalEngine(player.Character) end
+table.insert(activeConnections, player.CharacterAdded:Connect(constructTacticalEngine))
+
+table.insert(activeConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed or not config.Active then return end
+	if input.KeyCode == Enum.KeyCode.F then
+		config.Enabled = not config.Enabled
+		updateHUDStrings()
+	elseif input.KeyCode == Enum.KeyCode.R then
+		if not config.Enabled then return end
+		config.Mode = config.Mode + 1
+		if config.Mode > 3 then config.Mode = 1 end 
+		updateHUDStrings()
+	elseif input.KeyCode == Enum.KeyCode.E then
+		config.BrightnessIndex = math.min(#BRIGHTNESS_STEPS, config.BrightnessIndex + 1)
+		local val = BRIGHTNESS_STEPS[config.BrightnessIndex]
+		if spotBeam then spotBeam.Brightness = val end
+		statusText.Text = "Flashlight Brightness: " .. tostring(val)
+	elseif input.KeyCode == Enum.KeyCode.Q then
+		config.BrightnessIndex = math.max(1, config.BrightnessIndex - 1)
+		local val = BRIGHTNESS_STEPS[config.BrightnessIndex]
+		if spotBeam then spotBeam.Brightness = val end
+		statusText.Text = "Flashlight Brightness: " .. tostring(val)
+	end
+end))
+
+killBtn.MouseButton1Click:Connect(function()
+	config.Active = false
+	config.Enabled = false
+	for _, conn in ipairs(activeConnections) do if conn then conn:Disconnect() end end
+	activeConnections = {}
+	if torchPart then torchPart:Destroy() end
+	if splashLightPart then splashLightPart:Destroy() end
+	if screenGui then screenGui:Destroy() end
+	print("SUCCESS: Tactical Flashlight uninstalled.")
+end)
