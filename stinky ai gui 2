@@ -1,0 +1,200 @@
+-- PART 2: Logic & Execution Engine (Fixed Target Filtering)
+local PathfindingService = game:GetService("PathfindingService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local hrp = character:WaitForChild("HumanoidRootPart")
+
+if not getgenv().AsylumConfig then
+	getgenv().AsylumConfig = {
+		AutoMop = false,
+		AutoCombat = false,
+		SmartStrafe = true,
+		CombatRange = 16,
+		AttackReach = 4.5,
+		ScriptRunning = true
+	}
+end
+
+local config = getgenv().AsylumConfig
+local currentTargetSpill = nil
+
+-- FIXED: Dynamic visual asset and tool filter engine
+local function getSmartCombatTarget()
+	local closestEnemy = nil
+	local shortestDistance = config.CombatRange
+	
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Character:FindFirstChild("Humanoid") then
+			local enemyChar = p.Character
+			local enemyHum = enemyChar.Humanoid
+			
+			if enemyHum.Health > 0 then
+				local isStaff = false
+				
+				-- 1. Scan player names and team labels directly if available
+				local teamName = p.Team and p.Team.Name or ""
+				if string.find(string.lower(teamName), "orderly") or string.find(string.lower(teamName), "guard") or string.find(string.lower(teamName), "epu") then
+					isStaff = true
+				end
+				
+				-- 2. Fallback check: Scan their active tools for server staff items
+				if not isStaff then
+					for _, item in ipairs(enemyChar:GetChildren()) do
+						if item:IsA("Tool") and (string.find(string.lower(item.Name), "stun") or string.find(string.lower(item.Name), "staff") or string.find(string.lower(item.Name), "taser") or string.find(string.lower(item.Name), "handcuff")) then
+							isStaff = true
+							break
+						end
+					end
+				end
+				
+				-- 3. Fallback check: Check their backpack if tools aren't actively held
+				if not isStaff and p:FindFirstChild("Backpack") then
+					for _, item in ipairs(p.Backpack:GetChildren()) do
+						if string.find(string.lower(item.Name), "stun") or string.find(string.lower(item.Name), "staff") or string.find(string.lower(item.Name), "taser") then
+							isStaff = true
+							break
+						end
+					end
+				end
+				
+				if isStaff then
+					local distance = (hrp.Position - enemyChar.HumanoidRootPart.Position).Magnitude
+					if distance < shortestDistance then
+						shortestDistance = distance
+						closestEnemy = enemyChar
+					end
+				end
+			end
+		end
+	end
+	return closestEnemy
+end
+
+local function walkToTarget(targetPosition)
+	local visualCube = workspace:FindFirstChild("AITargetCube")
+	if not visualCube then
+		visualCube = Instance.new("Part")
+		visualCube.Name = "AITargetCube"
+		visualCube.Size = Vector3.new(2, 2, 2)
+		visualCube.Anchored = true
+		visualCube.CanCollide = false
+		visualCube.Material = Enum.Material.Neon
+		visualCube.Color = Color3.fromRGB(0, 255, 100)
+		visualCube.Parent = workspace
+	end
+	visualCube.Position = targetPosition
+
+	local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
+	local success = pcall(function() path:ComputeAsync(hrp.Position, targetPosition) end)
+	
+	if success and path.Status == Enum.PathStatus.Success then
+		for _, waypoint in ipairs(path:GetWaypoints()) do
+			if not config.ScriptRunning or (not config.AutoMop and not config.AutoCombat) then break end
+			if currentTargetSpill == nil or not currentTargetSpill.Parent then break end
+			if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
+			
+			local reachedNode = false
+			local nodeTimeout = 0
+			while not reachedNode and nodeTimeout < 1.2 do
+				local diffVector = waypoint.Position - hrp.Position
+				if diffVector.Magnitude <= 2.8 then
+					reachedNode = true
+					break
+				end
+				humanoid:Move(Vector3.new(diffVector.X, 0, diffVector.Z).Unit, false)
+				RunService.PostSimulation:Wait()
+				nodeTimeout = nodeTimeout + 0.015
+			end
+		end
+	end
+	
+	if visualCube then visualCube:Destroy() end
+end
+
+local function findClosestSpill()
+	local closestSpill = nil
+	local shortestDistance = math.huge
+	local spillsFolder = workspace:FindFirstChild("Ignored") and workspace.Ignored:FindFirstChild("Spills")
+	if not spillsFolder then return nil end
+	
+	for _, obj in ipairs(spillsFolder:GetChildren()) do
+		local pos = obj:IsA("BasePart") and obj.Position or obj:IsA("Model") and obj:GetPivot().Position
+		if pos and (obj.Name == "Spill_Large" or obj.Name == "Spill_Medium" or obj.Name == "Spill_Small") then
+			local distance = (hrp.Position - pos).Magnitude
+			if distance < shortestDistance then
+				shortestDistance = distance
+				closestSpill = obj
+			end
+		end
+	end
+	return closestSpill
+end
+
+-- Combat Thread Loop
+RunService.PostSimulation:Connect(function()
+	if not config.ScriptRunning or not config.AutoCombat then return end
+	local target = getSmartCombatTarget()
+	if target and target:FindFirstChild("HumanoidRootPart") then
+		local enemyHrp = target.HumanoidRootPart
+		local distance = (hrp.Position - enemyHrp.Position).Magnitude
+		
+		-- Auto-equip offensive combat item
+		local weapon = player.Backpack:FindFirstChildOfClass("Tool")
+		if weapon and not character:FindFirstChild(weapon.Name) then weapon.Parent = character end
+		
+		if config.SmartStrafe then
+			if distance <= config.AttackReach then
+				hrp.AssemblyLinearVelocity = (hrp.Position - enemyHrp.Position).Unit * 16
+			else
+				local orbitVector = Vector3.new(-enemyHrp.CFrame.LookVector.Z, 0, enemyHrp.CFrame.LookVector.X).Unit
+				hrp.AssemblyLinearVelocity = (orbitVector * 14) + ((enemyHrp.Position - hrp.Position).Unit * 6)
+			end
+		end
+		
+		if distance <= config.AttackReach then
+			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+			task.wait(0.01)
+			VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+		end
+	end
+end)
+
+-- Mop Thread Loop
+task.spawn(function()
+	while config.ScriptRunning do
+		if humanoid.Health <= 0 then
+			task.wait(2)
+			character = player.Character or player.CharacterAdded:Wait()
+			humanoid = character:WaitForChild("Humanoid")
+			hrp = character:WaitForChild("HumanoidRootPart")
+		end
+		
+		if config.AutoMop and (not config.AutoCombat or not getSmartCombatTarget()) then
+			local mop = player.Backpack:FindFirstChild("Mop") or player.Backpack:FindFirstChild("Ignotus Mop")
+			if mop and not character:FindFirstChild(mop.Name) then mop.Parent = character end
+			
+			currentTargetSpill = findClosestSpill()
+			if currentTargetSpill and currentTargetSpill.Parent then
+				local targetPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
+				walkToTarget(targetPos)
+				
+				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= 5.5 then
+					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+					local holdTimeout = 0
+					while currentTargetSpill and currentTargetSpill.Parent and holdTimeout < 7.5 do
+						task.wait(0.05)
+						holdTimeout = holdTimeout + 0.05
+					end
+					VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+				end
+			end
+		end
+		task.wait(0.01)
+	end
+end)
+print("Part 2 execution loops started successfully.")
