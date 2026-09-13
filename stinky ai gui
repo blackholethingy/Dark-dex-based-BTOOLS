@@ -110,9 +110,9 @@ killButton.MouseButton1Click:Connect(function()
 	print("GUI Core uninstalled.")
 end)
 
-print("Part 1: UI Framework built successfully.")
+print("Part 1: Master UI loaded successfully.")
 -- ============================================================================
--- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS (INSTANT CLICK FIX)
+-- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS (DIRECT PRECISION)
 -- ============================================================================
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
@@ -216,7 +216,7 @@ local function walkToTarget(targetPosition)
 	end
 	visualCube.Position = targetPosition
 
-	local path = PathfindingService:CreatePath({AgentRadius = 2.5, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3})
+	local path = PathfindingService:CreatePath({AgentRadius = 2.0, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 2.5})
 	local success = pcall(function() path:ComputeAsync(hrp.Position, targetPosition) end)
 	
 	if success and path.Status == Enum.PathStatus.Success then
@@ -227,17 +227,6 @@ local function walkToTarget(targetPosition)
 			char, humanoid, hrp = getLocalCharacterState()
 			if not config.ScriptRunning or (not config.AutoMop and not config.AutoCombat) or not hrp or not humanoid then break end
 			
-			-- ZERO LATENCY OVERRIDE: Drop navigation loop immediately if we match cleaning perimeter requirements mid-path
-			if currentTargetSpill and currentTargetSpill.Parent then
-				local spillPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
-				local currentDist = (hrp.Position - spillPos).Magnitude
-				local triggerRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
-				
-				if currentDist <= triggerRange then
-					break 
-				end
-			end
-			
 			if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
 			
 			local reachedNode = false
@@ -246,15 +235,10 @@ local function walkToTarget(targetPosition)
 				char, humanoid, hrp = getLocalCharacterState()
 				if not hrp or not humanoid then break end
 				
-				if currentTargetSpill and currentTargetSpill.Parent then
-					local spillPos = currentTargetSpill:IsA("BasePart") and currentTargetSpill.Position or currentTargetSpill:GetPivot().Position
-					local currentDist = (hrp.Position - spillPos).Magnitude
-					local triggerRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
-					if currentDist <= triggerRange then break end
-				end
-				
 				local diffVector = waypoint.Position - hrp.Position
-				if diffVector.Magnitude <= 4.5 then
+				
+				-- FIXED: Strict arrival threshold (1.5 studs) forcing character to be right on top of the green cube
+				if diffVector.Magnitude <= 1.5 then
 					reachedNode = true
 					break
 				end
@@ -264,7 +248,7 @@ local function walkToTarget(targetPosition)
 				if stuckTimer >= 0.8 then
 					local distanceMoved = (hrp.Position - lastPosition).Magnitude
 					if distanceMoved <= 1.2 then
-						print("[Anti-Stuck] Railing lock recognized. Vaulting obstacle forward...")
+						print("[Anti-Stuck] Railing bottleneck detected. Executing dynamic forward vault...")
 						humanoid.Jump = true
 						
 						local forwardVector = Vector3.new(diffVector.X, 0, diffVector.Z).Unit
@@ -312,9 +296,9 @@ local function findClosestSpill()
 	end
 	return closestSpill
 end
-print("Part 2: Operational core trackers loaded.")
+print("Part 2: Operational core trackers loaded with direct precision configurations.")
 -- ============================================================================
--- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS (WEAPON FIXED)
+-- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS
 -- ============================================================================
 
 -- Dedicated helper logic to force weapon equips and exclude cleaning gear during active spikes
@@ -355,7 +339,6 @@ RunService.PostSimulation:Connect(function(deltaTime)
 		local enemyHrp = target.HumanoidRootPart
 		local distance = (hrp.Position - enemyHrp.Position).Magnitude
 		
-		-- Safely locks out tool swap conflicts by prioritising actual combat objects
 		local backpack = player:FindFirstChild("Backpack")
 		if backpack then
 			forceEquipMeleeWeapon(character, backpack)
@@ -416,7 +399,8 @@ task.spawn(function()
 						currentTargetSpill = nil 
 						walkToTarget(targetPos)
 						
-						if (hrp.Position - targetPos).Magnitude <= 8.5 then
+						-- FIXED: Must be directly on top of spawner coordinates to execute key strings
+						if (hrp.Position - targetPos).Magnitude <= 3.5 then
 							local prompt = nil
 							for _, descendant in ipairs(giver:GetDescendants()) do
 								if descendant:IsA("ProximityPrompt") then
@@ -463,9 +447,8 @@ task.spawn(function()
 				
 				walkToTarget(targetPos)
 				
-				local interactionRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
-				
-				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= interactionRange then
+				-- FIXED: Tight interaction checking forces you directly onto the green cube surface before interacting
+				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= 4.0 then
 					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
 					
 					local holdTimeout = 0
@@ -484,4 +467,4 @@ task.spawn(function()
 	end
 end)
 
-print("Part 3: Runtime loops successfully initiated.")
+print("Part 3: Complete multi-threaded execution loops started cleanly.")
