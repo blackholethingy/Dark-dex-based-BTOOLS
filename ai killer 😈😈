@@ -231,7 +231,7 @@ local RunService = game:GetService("RunService")
 local localPlayer = game:GetService("Players").LocalPlayer
 
 local ATTACK_RANGE = 8
-local PATH_RECALC_TIME = 2.0 -- Increased to 2.0s to drastically reduce calculation frequency lag
+local PATH_RECALC_TIME = 1.0 -- Standardized to a safe interval since beam tracking is passive
 local lastPathUpdateTime = 0
 _G.ActiveWaypoints = {}
 local currentWaypointIndex = 1
@@ -265,33 +265,37 @@ targetBox.CanCollide = false
 targetBox.CastShadow = false
 targetBox.Parent = visualFolder
 
--- Initialize fixed pool of EXACTLY 5 trail nodes to fix layout generation lag completely
-local trailPool = {}
-for i = 1, 5 do
-	local p = visualFolder:FindFirstChild("PathStep" .. i) or Instance.new("Part")
-	p.Name = "PathStep" .. i
-	p.Size = Vector3.new(1.2, 1.2, 1.2)
-	p.Color = Color3.fromRGB(255, 0, 0)
-	p.Material = Enum.Material.Neon
-	p.Transparency = 1 -- Hidden by default
-	p.Anchored = true
-	p.CanCollide = false
-	p.CastShadow = false
-	p.Parent = visualFolder
-	trailPool[i] = p
-end
+-- Initialize specialized GPU Attachments and Beam components
+local playerAttachment = Instance.new("Attachment")
+playerAttachment.Name = "TrackerPlayerAttachment"
+
+local targetAttachment = Instance.new("Attachment")
+targetAttachment.Name = "TrackerTargetAttachment"
+targetAttachment.Parent = targetBox
+
+local pathBeam = visualFolder:FindFirstChild("TrackerPathBeam") or Instance.new("Beam")
+pathBeam.Name = "TrackerPathBeam"
+pathBeam.Attachment0 = playerAttachment
+pathBeam.Attachment1 = targetAttachment
+pathBeam.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0)) -- Neon Red Color Sequence
+pathBeam.Width0 = 0.5 -- Starting width at player feet
+pathBeam.Width1 = 0.5 -- Ending width at target box
+pathBeam.LightEmission = 1 -- Max brightness glow multiplier
+pathBeam.LightInfluence = 0 -- Unaffected by world lighting maps
+pathBeam.Enabled = false
+pathBeam.FaceCamera = true
+pathBeam.Parent = visualFolder
 
 _G.ClearVisualMarkers = function()
 	targetHighlight.Enabled = false
 	targetHighlight.Adornee = nil
 	targetBox.Transparency = 1
-	for _, p in ipairs(trailPool) do
-		p.Transparency = 1
-	end
+	pathBeam.Enabled = false
+	playerAttachment.Parent = nil
 end
 
 ----------------------------------------------------------------
--- 5. ZERO-LAG OBJECT POOLING VISUAL PASS (5 NODE STRICT LIMIT)
+-- 5. GPU RENDER BEAM CONTROL ROUTINE
 ----------------------------------------------------------------
 _G.RenderVisualPath = function()
 	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
@@ -305,46 +309,17 @@ _G.RenderVisualPath = function()
 	local myRoot = myCharacter.HumanoidRootPart
 	local targetRoot = targetCharacter.HumanoidRootPart
 
-	-- 1. Enable Highlight and update Target Cube location without creating new ones
+	-- 1. Translate layout nodes smoothly
 	targetHighlight.Adornee = targetCharacter
 	targetHighlight.Enabled = true
 	targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
 	targetBox.Transparency = 0
 
-	-- 2. Position the Trail nodes dynamically out of our fixed 5-node object pool
-	local poolIndex = 1
-	if #_G.ActiveWaypoints > 0 then
-		local lastPlacedPos = nil
-		for i = currentWaypointIndex, #_G.ActiveWaypoints do
-			if poolIndex > 5 then break end -- Hard limit check
-			local wp = _G.ActiveWaypoints[i]
-			
-			if not lastPlacedPos or (wp.Position - lastPlacedPos).Magnitude >= 6 then -- Spaced slightly wider for better 5-node coverage
-				lastPlacedPos = wp.Position
-				local node = trailPool[poolIndex]
-				node.Position = wp.Position + Vector3.new(0, 0.6, 0)
-				node.Transparency = 0
-				poolIndex = poolIndex + 1
-			end
-		end
-	else
-		-- Fallback to straight line vector ticks if client pathfinding array returns empty
-		local directDistance = (targetRoot.Position - myRoot.Position).Magnitude
-		local segments = math.min(math.floor(directDistance / 6), 5)
-		
-		for i = 1, segments do
-			local alpha = i / segments
-			local node = trailPool[poolIndex]
-			node.Position = myRoot.Position:Lerp(targetRoot.Position, alpha) + Vector3.new(0, 0.6, 0)
-			node.Transparency = 0
-			poolIndex = poolIndex + 1
-		end
-	end
-
-	-- Hide remaining parts in the pool that aren't currently needed
-	for i = poolIndex, 5 do
-		trailPool[i].Transparency = 1
-	end
+	-- 2. Snap player attachment node directly inside your center root matrix
+	playerAttachment.Parent = myRoot
+	
+	-- 3. Open visibility gates to project the neon line
+	pathBeam.Enabled = true
 end
 
 ----------------------------------------------------------------
@@ -368,7 +343,7 @@ local function computeNewPath(startPos, targetPos)
 end
 
 local function autoRunLoop()
-	if not _G.IsScriptRunning then return end
+	if not isScriptRunning then return end
 
 	local character = _G.GetMyCharacter and _G.GetMyCharacter()
 	if not character then return end
@@ -390,7 +365,7 @@ local function autoRunLoop()
 				lastPathUpdateTime = now
 				computeNewPath(rootPart.Position, targetRoot.Position)
 			else
-				-- Instantly translate position frame bounds without instantiation cycles
+				-- Continuously stick the target tracking nodes onto the frame transform pipelines
 				if targetBox.Transparency == 0 then
 					targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
 				end
@@ -439,7 +414,8 @@ if _G.KillButton then
 		_G.ClearVisualMarkers()
 		targetHighlight:Destroy()
 		targetBox:Destroy()
-		for _, p in ipairs(trailPool) do p:Destroy() end
+		playerAttachment:Destroy()
+		pathBeam:Destroy()
 		local gui = localPlayer.PlayerGui:FindFirstChild("AutoTrackerGui")
 		if gui then gui:Destroy() end
 		print("Auto-Tracker terminated.")
