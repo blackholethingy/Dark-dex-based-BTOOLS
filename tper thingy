@@ -1,0 +1,418 @@
+-- PART 1: UI Core Interface Dashboard
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+if playerGui:FindFirstChild("GridScannerDashboard") then
+	playerGui.GridScannerDashboard:Destroy()
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "GridScannerDashboard"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 420, 0, 380)
+mainFrame.Position = UDim2.new(0.5, -210, 0.25, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = mainFrame
+
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 35)
+header.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+header.BorderSizePixel = 0
+header.Parent = mainFrame
+
+local headerCorner = Instance.new("UICorner")
+headerCorner.CornerRadius = UDim.new(0, 8)
+headerCorner.Parent = header
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -40, 1, 0)
+title.Position = UDim2.new(0, 12, 0, 0)
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 13
+title.Font = Enum.Font.SourceSansBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "DYNAMIC PLATFORM SELECTION ENGINE"
+title.Parent = header
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 25, 0, 25)
+closeBtn.Position = UDim2.new(1, -32, 0, 5)
+closeBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.TextSize = 14
+closeBtn.Text = "X"
+closeBtn.Parent = header
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 4)
+closeCorner.Parent = closeBtn
+closeBtn.MouseButton1Click:Connect(function() screenGui:Destroy() end)
+
+local pathInput = Instance.new("TextBox")
+pathInput.Size = UDim2.new(1, -24, 0, 35)
+pathInput.Position = UDim2.new(0, 12, 0, 48)
+pathInput.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+pathInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+pathInput.PlaceholderText = "Container Target Directory (e.g. workspace.Ignored)"
+pathInput.Text = "workspace"
+pathInput.Font = Enum.Font.SourceSans
+pathInput.TextSize = 13
+pathInput.ClearTextOnFocus = false
+pathInput.Parent = mainFrame
+Instance.new("UICorner", pathInput).CornerRadius = UDim.new(0, 4)
+
+local nameInput = Instance.new("TextBox")
+nameInput.Size = UDim2.new(0, 150, 0, 35)
+nameInput.Position = UDim2.new(0, 12, 0, 92)
+nameInput.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+nameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+nameInput.PlaceholderText = "Match asset name..."
+nameInput.Text = ""
+nameInput.Font = Enum.Font.SourceSans
+nameInput.TextSize = 13
+nameInput.ClearTextOnFocus = false
+nameInput.Parent = mainFrame
+Instance.new("UICorner", nameInput).CornerRadius = UDim.new(0, 4)
+
+getgenv().AsylumUIElements = {
+	ScanButton = Instance.new("TextButton"),
+	TPButton = Instance.new("TextButton"),
+	ScrollingContainer = Instance.new("ScrollingFrame"),
+	PathInputBox = pathInput,
+	NameInputBox = nameInput
+}
+
+local scanBtn = getgenv().AsylumUIElements.ScanButton
+scanBtn.Size = UDim2.new(0, 110, 0, 35)
+scanBtn.Position = UDim2.new(0, 172, 0, 92)
+scanBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 200)
+scanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+scanBtn.Font = Enum.Font.SourceSansBold
+scanBtn.TextSize = 12
+scanBtn.Text = "SCAN TARGETS"
+scanBtn.Parent = mainFrame
+Instance.new("UICorner", scanBtn).CornerRadius = UDim.new(0, 4)
+
+local tpPlatformBtn = getgenv().AsylumUIElements.TPButton
+tpPlatformBtn.Size = UDim2.new(0, 115, 0, 35)
+tpPlatformBtn.Position = UDim2.new(1, -127, 0, 92)
+tpPlatformBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 100)
+tpPlatformBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+tpPlatformBtn.Font = Enum.Font.SourceSansBold
+tpPlatformBtn.TextSize = 12
+tpPlatformBtn.Text = "TP ALL BELOW"
+tpPlatformBtn.Parent = mainFrame
+Instance.new("UICorner", tpPlatformBtn).CornerRadius = UDim.new(0, 4)
+
+local scrollList = getgenv().AsylumUIElements.ScrollingContainer
+scrollList.Size = UDim2.new(1, -24, 0, 220)
+scrollList.Position = UDim2.new(0, 12, 0, 140)
+scrollList.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+scrollList.BorderSizePixel = 0
+scrollList.ScrollBarThickness = 6
+scrollList.Parent = mainFrame
+
+local listLayout = Instance.new("UIListLayout", scrollList)
+listLayout.Padding = UDim.new(0, 4)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local listPadding = Instance.new("UIPadding", scrollList)
+listPadding.PaddingTop = UDim.new(0, 4)
+listPadding.PaddingLeft = UDim.new(0, 4)
+listPadding.PaddingRight = UDim.new(0, 4)
+
+print("Part 1: Graphical layout framework completely drawn.")
+-- PART 2: Global Configuration Framework Setup
+if not getgenv().AsylumUIElements then
+	warn("ERROR: Please load Part 1 into the environment first before setting up Part 2 variables!")
+	return
+end
+
+getgenv().GridScannerConfig = {
+	ScriptRunning = true,
+	PathString = "workspace",
+	FilterString = ""
+}
+
+local ui = getgenv().AsylumUIElements
+local config = getgenv().GridScannerConfig
+
+ui.PathInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+	config.PathString = ui.PathInputBox.Text
+end)
+
+ui.NameInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+	config.FilterString = ui.NameInputBox.Text
+end)
+
+print("Part 2: Environmental variables and configuration maps safely loaded.")
+-- PART 3: Physics Processing & Reclaim Engine Loop (Deep-Path Parser)
+local PathfindingService = game:GetService("PathfindingService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local hrp = character:WaitForChild("HumanoidRootPart")
+
+local ui = getgenv().AsylumUIElements
+local config = getgenv().GridScannerConfig
+
+if not ui or not config then
+	warn("ERROR: Missing framework components! Please verify Part 1 and Part 2 are executed cleanly.")
+	return
+end
+
+local discoveredMatches = {}
+local targetPlatformInstance = nil
+local originalTransforms = {} 
+local countdownActive = false
+
+local function resolveStringToInstance(pathString)
+	local segments = {}
+	for seg in string.gmatch(pathString, "[^.]+") do 
+		table.insert(segments, seg) 
+	end
+	
+	local currentObj = game
+	local firstSegment = segments[1]
+	
+	if firstSegment and (string.lower(firstSegment) == "workspace") then
+		currentObj = workspace
+	elseif firstSegment and string.lower(firstSegment) == "game" then
+		currentObj = game
+	else 
+		return nil
+	end
+	
+	for i = 2, #segments do
+		if currentObj then
+			currentObj = currentObj:FindFirstChild(segments[i])
+		else
+			return nil
+		end
+	end
+	return currentObj
+end
+
+local function saveOriginalTransform(obj)
+	if originalTransforms[obj] then return end 
+	
+	if obj:IsA("BasePart") then
+		originalTransforms[obj] = {
+			CFrame = obj.CFrame,
+			Anchored = obj.Anchored
+		}
+	elseif obj:IsA("Model") then
+		originalTransforms[obj] = {
+			CFrame = obj:GetPivot(),
+			PartsData = {}
+		}
+		for _, part in ipairs(obj:GetDescendants()) do
+			if part:IsA("BasePart") then
+				originalTransforms[obj].PartsData[part] = part.Anchored
+			end
+		end
+	end
+end
+
+local function snapPosition(obj, position)
+	if obj:IsA("BasePart") then
+		obj.Anchored = true 
+		obj.CFrame = CFrame.new(position)
+	elseif obj:IsA("Model") then
+		obj:PivotTo(CFrame.new(position))
+		for _, part in ipairs(obj:GetDescendants()) do
+			if part:IsA("BasePart") then part.Anchored = true end
+		end
+	end
+end
+
+local function executeCleanReclaim()
+	countdownActive = false
+	print("Timer zeroed out. Reclaiming objects cleanly...")
+	
+	for obj, data in pairs(originalTransforms) do
+		pcall(function()
+			if obj:IsA("BasePart") then
+				obj.CFrame = data.CFrame
+				obj.Anchored = data.Anchored
+			elseif obj:IsA("Model") then
+				obj:PivotTo(data.CFrame)
+				for part, wasAnchored in pairs(data.PartsData) do
+					if part and part.Parent then part.Anchored = wasAnchored end
+				end
+			end
+		end)
+	end
+	
+	if targetPlatformInstance and targetPlatformInstance.Parent then
+		targetPlatformInstance:Destroy()
+		targetPlatformInstance = nil
+	end
+	
+	originalTransforms = {}
+	print("Reclaim complete.")
+end
+
+local function generateDynamicPlatform(itemCount)
+	if targetPlatformInstance and targetPlatformInstance.Parent then
+		targetPlatformInstance:Destroy()
+	end
+	
+	local itemsPerRow = math.ceil(math.sqrt(itemCount))
+	local sizeX = math.max(15, itemsPerRow * 8)
+	local sizeZ = math.max(15, math.ceil(itemCount / itemsPerRow) * 8)
+	
+	local plat = Instance.new("Part")
+	plat.Name = "SortPlatform_Engine"
+	plat.Size = Vector3.new(sizeX, 1, sizeZ)
+	
+	local platformYOffset = hrp.Position.Y - (humanoid.HipHeight + 2)
+	plat.CFrame = CFrame.new(hrp.Position.X, platformYOffset, hrp.Position.Z)
+	
+	plat.Anchored = true
+	plat.CanCollide = true
+	plat.Material = Enum.Material.SmoothPlastic
+	plat.Color = Color3.fromRGB(40, 40, 45)
+	plat.Parent = workspace
+	
+	targetPlatformInstance = plat
+	return plat.CFrame, sizeX, sizeZ, itemsPerRow
+end
+
+ui.ScanButton.MouseButton1Click:Connect(function()
+	for _, child in ipairs(ui.ScrollingContainer:GetChildren()) do
+		if child:IsA("Frame") then child:Destroy() end
+	end
+	ui.ScrollingContainer.CanvasSize = UDim2.new(0, 0, 0, 0)
+	discoveredMatches = {}
+	
+	local container = resolveStringToInstance(config.PathString)
+	local filterText = string.lower(config.FilterString)
+	
+	if not container then
+		ui.ScanButton.Text = "INVALID PATH!"
+		task.delay(1.5, function() ui.ScanButton.Text = "SCAN TARGETS" end)
+		return
+	end
+	
+	for _, obj in ipairs(container:GetChildren()) do
+		if filterText == "" or string.find(string.lower(obj.Name), filterText) then
+			table.insert(discoveredMatches, obj)
+			
+			local rowFrame = Instance.new("Frame")
+			rowFrame.Size = UDim2.new(1, 0, 0, 35)
+			rowFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+			rowFrame.BorderSizePixel = 0
+			rowFrame.Parent = ui.ScrollingContainer
+			Instance.new("UICorner", rowFrame).CornerRadius = UDim.new(0, 4)
+			
+			local nameText = Instance.new("TextLabel")
+			nameText.Size = UDim2.new(1, -110, 1, 0)
+			nameText.Position = UDim2.new(0, 10, 0, 0)
+			nameText.BackgroundTransparency = 1
+			nameText.TextColor3 = Color3.fromRGB(220, 220, 220)
+			nameText.Font = Enum.Font.SourceSans
+			nameText.TextSize = 13
+			nameText.TextXAlignment = Enum.TextXAlignment.Left
+			nameText.Text = "[" .. obj.ClassName .. "] " .. obj.Name
+			nameText.Parent = rowFrame
+			
+			local pullBtn = Instance.new("TextButton")
+			pullBtn.Size = UDim2.new(0, 90, 0, 25)
+			pullBtn.Position = UDim2.new(1, -100, 0, 5)
+			pullBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+			pullBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+			pullBtn.Font = Enum.Font.SourceSansBold
+			pullBtn.TextSize = 12
+			pullBtn.Text = "PULL TO ME"
+			pullBtn.Parent = rowFrame
+			Instance.new("UICorner", pullBtn).CornerRadius = UDim.new(0, 4)
+			
+			pullBtn.MouseButton1Click:Connect(function()
+				local currentHrp = character:FindFirstChild("HumanoidRootPart")
+				if currentHrp then
+					originalTransforms[obj] = nil 
+					
+					if obj:IsA("BasePart") then
+						obj.Anchored = false
+						obj.CFrame = currentHrp.CFrame + currentHrp.CFrame.LookVector * 3
+					elseif obj:IsA("Model") then
+						obj:PivotTo(currentHrp.CFrame + currentHrp.CFrame.LookVector * 3)
+						for _, part in ipairs(obj:GetDescendants()) do
+							if part:IsA("BasePart") then part.Anchored = false end
+						end
+					end
+					pullBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
+					pullBtn.Text = "PULLED ✔"
+					
+					if targetPlatformInstance and not countdownActive then
+						countdownActive = true
+						targetPlatformInstance.Material = Enum.Material.Neon
+						targetPlatformInstance.Color = Color3.fromRGB(255, 100, 0)
+						
+						task.spawn(function()
+							for count = 5, 1, -1 do
+								if not targetPlatformInstance then break end
+								ui.TPButton.Text = "RECLAIMING IN " .. tostring(count) .. "..."
+								ui.TPButton.BackgroundColor3 = Color3.fromRGB(180, 80, 0)
+								task.wait(1)
+							end
+							ui.TPButton.Text = "TP ALL BELOW"
+							ui.TPButton.BackgroundColor3 = Color3.fromRGB(0, 160, 100)
+							executeCleanReclaim()
+						end)
+					end
+				end
+			end)
+		end
+	end
+	local listLayout = ui.ScrollingContainer:FindFirstChildOfClass("UIListLayout")
+	ui.ScrollingContainer.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 10)
+end)
+
+ui.TPButton.MouseButton1Click:Connect(function()
+	if countdownActive then return end 
+	
+	local totalItems = #discoveredMatches
+	if totalItems == 0 then return end
+	
+	local startCFrame, platX, platZ, rowLimit = generateDynamicPlatform(totalItems)
+	
+	local spacing = 7 
+	local halfX = platX / 2
+	local halfZ = platZ / 2
+	
+	for index, obj in ipairs(discoveredMatches) do
+		saveOriginalTransform(obj)
+		
+		local rowIndex = math.floor((index - 1) / rowLimit)
+		local colIndex = (index - 1) % rowLimit
+		
+		local offsetX = -halfX + (colIndex * spacing) + (spacing / 2)
+		local offsetZ = -halfZ + (rowIndex * spacing) + (spacing / 2)
+		local offsetHeight = 1.5 
+		
+		local targetWorldPos = (startCFrame * CFrame.new(offsetX, offsetHeight, offsetZ)).Position
+		
+		pcall(function()
+			snapPosition(obj, targetWorldPos)
+		end)
+	end
+	print("Part 3 Logic Core Loop running successfully.")
+end)
