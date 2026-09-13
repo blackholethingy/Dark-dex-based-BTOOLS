@@ -1,4 +1,6 @@
--- PART 1: UI & Config Core
+-- ============================================================================
+-- PART 1: UI & CONFIG CORE
+-- ============================================================================
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -40,7 +42,7 @@ titleLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 14
 titleLabel.Font = Enum.Font.SourceSansBold
-titleLabel.Text = "ASYLUM UTILITY CORE - PART 1"
+titleLabel.Text = "ASYLUM UTILITY CORE"
 titleLabel.Parent = mainFrame
 
 local titleCorner = Instance.new("UICorner")
@@ -107,4 +109,5 @@ killButton.MouseButton1Click:Connect(function()
 	if visualCube then visualCube:Destroy() end
 	print("GUI Core uninstalled.")
 end)
+
 print("Part 1 loaded successfully.")
