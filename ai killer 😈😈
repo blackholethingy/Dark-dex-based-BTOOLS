@@ -100,10 +100,10 @@ _G.KillButton.Position = UDim2.new(0, 5, 1, -45)
 _G.KillButton.Text = "KILL SCRIPT"
 _G.KillButton.Font = Enum.Font.SourceSansBold
 _G.KillButton.TextSize = 14
-killButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-killButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-killButton.BorderSizePixel = 0
-killButton.Parent = _G.MainFrame
+_G.KillButton.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+_G.KillButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+_G.KillButton.BorderSizePixel = 0
+_G.KillButton.Parent = _G.MainFrame
 -- PART 2: FEED LIST MANIPULATIONS (Place this second)
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -231,7 +231,7 @@ local RunService = game:GetService("RunService")
 local localPlayer = game:GetService("Players").LocalPlayer
 
 local ATTACK_RANGE = 8
-local PATH_RECALC_TIME = 1.0 -- Increased to 1.0s to drastically lower computational overhead
+local PATH_RECALC_TIME = 2.0 -- Increased to 2.0s to drastically reduce calculation frequency lag
 local lastPathUpdateTime = 0
 _G.ActiveWaypoints = {}
 local currentWaypointIndex = 1
@@ -265,9 +265,9 @@ targetBox.CanCollide = false
 targetBox.CastShadow = false
 targetBox.Parent = visualFolder
 
--- Initialize fixed pool of 15 trail nodes to fix layout generation lag completely
+-- Initialize fixed pool of EXACTLY 5 trail nodes to fix layout generation lag completely
 local trailPool = {}
-for i = 1, 15 do
+for i = 1, 5 do
 	local p = visualFolder:FindFirstChild("PathStep" .. i) or Instance.new("Part")
 	p.Name = "PathStep" .. i
 	p.Size = Vector3.new(1.2, 1.2, 1.2)
@@ -291,7 +291,7 @@ _G.ClearVisualMarkers = function()
 end
 
 ----------------------------------------------------------------
--- 5. ZERO-LAG OBJECT POOLING VISUAL PASS
+-- 5. ZERO-LAG OBJECT POOLING VISUAL PASS (5 NODE STRICT LIMIT)
 ----------------------------------------------------------------
 _G.RenderVisualPath = function()
 	local myCharacter = _G.GetMyCharacter and _G.GetMyCharacter()
@@ -311,15 +311,15 @@ _G.RenderVisualPath = function()
 	targetBox.Position = targetRoot.Position + Vector3.new(0, 5, 0)
 	targetBox.Transparency = 0
 
-	-- 2. Position the Trail nodes dynamically out of our fixed object pool
+	-- 2. Position the Trail nodes dynamically out of our fixed 5-node object pool
 	local poolIndex = 1
 	if #_G.ActiveWaypoints > 0 then
 		local lastPlacedPos = nil
 		for i = currentWaypointIndex, #_G.ActiveWaypoints do
-			if poolIndex > 15 then break end
+			if poolIndex > 5 then break end -- Hard limit check
 			local wp = _G.ActiveWaypoints[i]
 			
-			if not lastPlacedPos or (wp.Position - lastPlacedPos).Magnitude >= 4 then
+			if not lastPlacedPos or (wp.Position - lastPlacedPos).Magnitude >= 6 then -- Spaced slightly wider for better 5-node coverage
 				lastPlacedPos = wp.Position
 				local node = trailPool[poolIndex]
 				node.Position = wp.Position + Vector3.new(0, 0.6, 0)
@@ -330,7 +330,7 @@ _G.RenderVisualPath = function()
 	else
 		-- Fallback to straight line vector ticks if client pathfinding array returns empty
 		local directDistance = (targetRoot.Position - myRoot.Position).Magnitude
-		local segments = math.min(math.floor(directDistance / 4), 15)
+		local segments = math.min(math.floor(directDistance / 6), 5)
 		
 		for i = 1, segments do
 			local alpha = i / segments
@@ -342,7 +342,7 @@ _G.RenderVisualPath = function()
 	end
 
 	-- Hide remaining parts in the pool that aren't currently needed
-	for i = poolIndex, 15 do
+	for i = poolIndex, 5 do
 		trailPool[i].Transparency = 1
 	end
 end
