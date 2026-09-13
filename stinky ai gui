@@ -1,5 +1,5 @@
 -- ============================================================================
--- PART 1: UI & CONFIG CORE
+-- BLOCK 1: PART 1 UI & GLOBAL CONFIGURATION FRAMEWORK
 -- ============================================================================
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -110,9 +110,9 @@ killButton.MouseButton1Click:Connect(function()
 	print("GUI Core uninstalled.")
 end)
 
-print("Part 1 loaded successfully.")
+print("Part 1: Master UI loaded successfully.")
 -- ============================================================================
--- PART 2 - BLOCK A: CORE FUNCTIONS & TARGET STATE TRACKERS
+-- BLOCK 2: PART 2 - CORE FUNCTIONS & PATHFINDING TRACKERS
 -- ============================================================================
 local PathfindingService = game:GetService("PathfindingService")
 local RunService = game:GetService("RunService")
@@ -237,7 +237,8 @@ local function walkToTarget(targetPosition)
 				if not hrp or not humanoid then break end
 				
 				local diffVector = waypoint.Position - hrp.Position
-				if diffVector.Magnitude <= 3.0 then
+				-- Arrival threshold set to 4.5 studs to clear wide puddle dimensions early
+				if diffVector.Magnitude <= 4.5 then
 					reachedNode = true
 					break
 				end
@@ -273,9 +274,9 @@ local function findClosestSpill()
 	end
 	return closestSpill
 end
-print("Part 2 - Block A loaded.")
+print("Part 2: Operational core trackers loaded.")
 -- ============================================================================
--- PART 2 - BLOCK B: ACTIVE COMBAT & POST-DEATH MOP RECOVERY LOOPS
+-- BLOCK 3: PART 2 - RUNTIME EXECUTION & TOOL RECOVERY LOOPS
 -- ============================================================================
 
 -- Anti-Anti-Cheat Safe Orbit Combat Framework
@@ -354,18 +355,33 @@ task.spawn(function()
 						walkToTarget(targetPos)
 						
 						if (hrp.Position - targetPos).Magnitude <= 8.5 then
-							local prompt = giver:FindFirstChildWhichIsA("ProximityPrompt", true)
+							-- Deep search every descendant for ANY ProximityPrompt instance
+							local prompt = nil
+							for _, descendant in ipairs(giver:GetDescendants()) do
+								if descendant:IsA("ProximityPrompt") then
+									prompt = descendant
+									break
+								end
+							end
+							
 							if prompt then
-								-- Instant trigger sequence for HoldTime = 0
-								prompt:InputBegan(player)
-								task.wait(0.05)
-								prompt:InputEnded(player)
+								-- Direct invocation if supported, otherwise input simulation
+								if fireproximityprompt then
+									fireproximityprompt(prompt)
+								else
+									prompt:InputBegan(player)
+									task.wait(0.05)
+									prompt:InputEnded(player)
+								end
+								print("[Mop Recovery] Located and triggered hidden ProximityPrompt.")
 							else
+								-- Manual E key-mash fallback if prompt asset configuration can't be fetched
 								VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
 								task.wait(0.05)
 								VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+								print("[Mop Recovery] No prompt instance found. Attempting manual key-mash fallback.")
 							end
-							task.wait(0.3)
+							task.wait(0.4)
 						end
 					end
 				else
@@ -388,7 +404,10 @@ task.spawn(function()
 				
 				walkToTarget(targetPos)
 				
-				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= 6.0 then
+				-- Dynamic range adjustment handles wide puddle perimeters seamlessly
+				local interactionRange = (currentTargetSpill.Name == "Spill_Large") and 9.5 or 6.0
+				
+				if currentTargetSpill and currentTargetSpill.Parent and (hrp.Position - targetPos).Magnitude <= interactionRange then
 					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
 					
 					local holdTimeout = 0
@@ -399,6 +418,7 @@ task.spawn(function()
 					end
 					
 					VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+					task.wait(0.05)
 				end
 			end
 		end
@@ -406,4 +426,4 @@ task.spawn(function()
 	end
 end)
 
-print("Part 2 - Block B runtime execution loops started successfully.")
+print("Part 3: Runtime loops successfully initiated.")
