@@ -1,6 +1,19 @@
 -- ==========================================================
--- AUTO PLAYER TRACKER
--- PATHFINDING + GUI ARRIVAL KEY SETTINGS
+-- PLAYER PATH TRACKER + CLOSE-RANGE COMBAT MODE
+-- ==========================================================
+--
+-- FAR AWAY:
+--   Roblox PathfindingService handles navigation.
+--
+-- CLOSE TO TARGET:
+--   Pathfinding STOPS.
+--   Jumping STOPS.
+--   Character holds position close enough to attack.
+--   Selected Tool activates.
+--
+-- BEAM:
+--   Visual only.
+--
 -- ==========================================================
 
 local Players = game:GetService("Players")
@@ -21,9 +34,21 @@ local playerGui = localPlayer:WaitForChild("PlayerGui")
 -- SETTINGS
 -- ==========================================================
 
+-- Tool begins activating inside this distance.
 local ATTACK_RANGE = 8
-local STOP_DISTANCE = 5
 
+-- IMPORTANT:
+-- Once we're this close, completely stop using pathfinding.
+local COMBAT_ENTER_DISTANCE = 8
+
+-- Pathfinding doesn't resume until the target gets this far away.
+-- This prevents rapid switching between combat/path modes.
+local COMBAT_EXIT_DISTANCE = 11
+
+-- Desired distance while fighting.
+local COMBAT_HOLD_DISTANCE = 5
+
+-- Path settings.
 local PATH_REPATH_DISTANCE = 6
 
 local PATH_AGENT_RADIUS = 2.0
@@ -33,7 +58,7 @@ local PATH_WAYPOINT_SPACING = 2.5
 local NODE_TIMEOUT = 1.5
 
 local NORMAL_NODE_DISTANCE = 4.5
-local FINAL_NODE_DISTANCE = 0.5
+local FINAL_NODE_DISTANCE = 0.75
 
 local STUCK_CHECK_TIME = 0.8
 local STUCK_DISTANCE = 1.2
@@ -47,32 +72,26 @@ local keyOptions = {
 		Name = "E",
 		Key = Enum.KeyCode.E
 	},
-
 	{
 		Name = "F",
 		Key = Enum.KeyCode.F
 	},
-
 	{
 		Name = "Q",
 		Key = Enum.KeyCode.Q
 	},
-
 	{
 		Name = "R",
 		Key = Enum.KeyCode.R
 	},
-
 	{
 		Name = "T",
 		Key = Enum.KeyCode.T
 	},
-
 	{
 		Name = "G",
 		Key = Enum.KeyCode.G
 	},
-
 	{
 		Name = "Space",
 		Key = Enum.KeyCode.Space
@@ -84,27 +103,22 @@ local durationOptions = {
 		Name = "1s",
 		Value = 1
 	},
-
 	{
 		Name = "2s",
 		Value = 2
 	},
-
 	{
 		Name = "3s",
 		Value = 3
 	},
-
 	{
 		Name = "5s",
 		Value = 5
 	},
-
 	{
 		Name = "10s",
 		Value = 10
 	},
-
 	{
 		Name = "Forever",
 		Value = math.huge
@@ -136,10 +150,14 @@ local selectedToolName = nil
 local currentPathToken = 0
 local pathWorkerRunning = false
 
+local combatMode = false
+
 local connections = {}
 
 local holdingArrivalKey = false
 local arrivalKeyToken = 0
+
+local lastAttack = 0
 
 -- ==========================================================
 -- CONNECTION HELPER
@@ -151,7 +169,7 @@ local function trackConnection(connection)
 end
 
 -- ==========================================================
--- CURRENT KEY SETTINGS
+-- ARRIVAL KEY SETTINGS
 -- ==========================================================
 
 local function getHoldKey()
@@ -171,11 +189,10 @@ local function getHoldDurationName()
 end
 
 -- ==========================================================
--- ARRIVAL KEY
+-- ARRIVAL KEY CONTROL
 -- ==========================================================
 
 local function releaseArrivalKey()
-
 	if not holdingArrivalKey then
 		return
 	end
@@ -185,19 +202,16 @@ local function releaseArrivalKey()
 	local key = getHoldKey()
 
 	pcall(function()
-
 		VirtualInputManager:SendKeyEvent(
 			false,
 			key,
 			false,
 			game
 		)
-
 	end)
 end
 
 local function holdArrivalKey()
-
 	if not HOLD_KEY_ENABLED then
 		return
 	end
@@ -214,37 +228,33 @@ local function holdArrivalKey()
 	holdingArrivalKey = true
 
 	pcall(function()
-
 		VirtualInputManager:SendKeyEvent(
 			true,
 			key,
 			false,
 			game
 		)
-
 	end)
 
-	if duration ~= math.huge then
-
-		task.spawn(function()
-
-			local started = os.clock()
-
-			while running
-				and holdingArrivalKey
-				and arrivalKeyToken == token
-				and os.clock() - started < duration
-			do
-
-				task.wait(0.05)
-			end
-
-			if arrivalKeyToken == token then
-				releaseArrivalKey()
-			end
-
-		end)
+	if duration == math.huge then
+		return
 	end
+
+	task.spawn(function()
+		local started = os.clock()
+
+		while running
+			and holdingArrivalKey
+			and arrivalKeyToken == token
+			and os.clock() - started < duration
+		do
+			task.wait(0.05)
+		end
+
+		if arrivalKeyToken == token then
+			releaseArrivalKey()
+		end
+	end)
 end
 
 -- ==========================================================
@@ -252,19 +262,16 @@ end
 -- ==========================================================
 
 local function getMyCharacter()
-
 	local folder = workspace:FindFirstChild("Characters")
 
 	if folder then
-
 		local named = folder:FindFirstChild(localPlayer.Name)
 
 		if named then
 			return named
 		end
 
-		local special =
-			folder:FindFirstChild("AreWeAloneOnEarth")
+		local special = folder:FindFirstChild("AreWeAloneOnEarth")
 
 		if special then
 			return special
@@ -275,7 +282,6 @@ local function getMyCharacter()
 end
 
 local function getTargetCharacter(player)
-
 	if not player then
 		return nil
 	end
@@ -283,7 +289,6 @@ local function getTargetCharacter(player)
 	local folder = workspace:FindFirstChild("Characters")
 
 	if folder then
-
 		local custom = folder:FindFirstChild(player.Name)
 
 		if custom then
@@ -295,7 +300,6 @@ local function getTargetCharacter(player)
 end
 
 local function getCharacterState(character)
-
 	if not character then
 		return nil, nil, nil
 	end
@@ -310,7 +314,6 @@ local function getCharacterState(character)
 		and root
 		and humanoid.Health > 0
 	then
-
 		return character, humanoid, root
 	end
 
@@ -318,7 +321,7 @@ local function getCharacterState(character)
 end
 
 -- ==========================================================
--- CLEAN OLD GUI
+-- CLEAN OLD UI
 -- ==========================================================
 
 local oldGui =
@@ -454,11 +457,7 @@ statusLabel.TextSize = 13
 statusLabel.Parent = mainFrame
 
 local function setStatus(text)
-
-	if statusLabel
-		and statusLabel.Parent
-	then
-
+	if statusLabel and statusLabel.Parent then
 		statusLabel.Text =
 			"Status: " .. text
 	end
@@ -511,7 +510,8 @@ playerHeader.Parent = mainFrame
 -- PLAYER LIST
 -- ==========================================================
 
-local playerScroller = Instance.new("ScrollingFrame")
+local playerScroller =
+	Instance.new("ScrollingFrame")
 
 playerScroller.Size =
 	UDim2.new(
@@ -541,7 +541,8 @@ playerScroller.ScrollBarThickness = 5
 playerScroller.CanvasSize = UDim2.new()
 playerScroller.Parent = mainFrame
 
-local playerLayout = Instance.new("UIListLayout")
+local playerLayout =
+	Instance.new("UIListLayout")
 
 playerLayout.Padding =
 	UDim.new(
@@ -598,7 +599,8 @@ toolHeader.Parent = mainFrame
 -- TOOL LIST
 -- ==========================================================
 
-local toolScroller = Instance.new("ScrollingFrame")
+local toolScroller =
+	Instance.new("ScrollingFrame")
 
 toolScroller.Size =
 	UDim2.new(
@@ -628,7 +630,8 @@ toolScroller.ScrollBarThickness = 5
 toolScroller.CanvasSize = UDim2.new()
 toolScroller.Parent = mainFrame
 
-local toolLayout = Instance.new("UIListLayout")
+local toolLayout =
+	Instance.new("UIListLayout")
 
 toolLayout.Padding =
 	UDim.new(
@@ -639,7 +642,7 @@ toolLayout.Padding =
 toolLayout.Parent = toolScroller
 
 -- ==========================================================
--- ARRIVAL SETTINGS HEADER
+-- ARRIVAL HEADER
 -- ==========================================================
 
 local arrivalHeader = Instance.new("TextLabel")
@@ -677,7 +680,9 @@ arrivalHeader.TextColor3 =
 		255
 	)
 
-arrivalHeader.Font = Enum.Font.SourceSansBold
+arrivalHeader.Font =
+	Enum.Font.SourceSansBold
+
 arrivalHeader.TextSize = 13
 arrivalHeader.Parent = mainFrame
 
@@ -730,7 +735,6 @@ keyButton.TextSize = 13
 keyButton.Parent = mainFrame
 
 keyButton.MouseButton1Click:Connect(function()
-
 	arrivalKeyToken += 1
 
 	releaseArrivalKey()
@@ -744,7 +748,6 @@ keyButton.MouseButton1Click:Connect(function()
 	keyButton.Text =
 		"Key: "
 		.. getHoldKeyName()
-
 end)
 
 -- ==========================================================
@@ -796,7 +799,6 @@ durationButton.TextSize = 13
 durationButton.Parent = mainFrame
 
 durationButton.MouseButton1Click:Connect(function()
-
 	arrivalKeyToken += 1
 
 	releaseArrivalKey()
@@ -810,11 +812,10 @@ durationButton.MouseButton1Click:Connect(function()
 	durationButton.Text =
 		"Hold: "
 		.. getHoldDurationName()
-
 end)
 
 -- ==========================================================
--- ENABLE/DISABLE ARRIVAL ACTION
+-- ARRIVAL TOGGLE
 -- ==========================================================
 
 local arrivalToggle = Instance.new("TextButton")
@@ -859,12 +860,10 @@ arrivalToggle.TextSize = 13
 arrivalToggle.Parent = mainFrame
 
 arrivalToggle.MouseButton1Click:Connect(function()
-
 	HOLD_KEY_ENABLED =
 		not HOLD_KEY_ENABLED
 
 	if HOLD_KEY_ENABLED then
-
 		arrivalToggle.Text =
 			"Hold Key On Arrival: ON"
 
@@ -874,9 +873,7 @@ arrivalToggle.MouseButton1Click:Connect(function()
 				130,
 				85
 			)
-
 	else
-
 		arrivalToggle.Text =
 			"Hold Key On Arrival: OFF"
 
@@ -891,7 +888,6 @@ arrivalToggle.MouseButton1Click:Connect(function()
 
 		releaseArrivalKey()
 	end
-
 end)
 
 -- ==========================================================
@@ -985,7 +981,7 @@ killButton.TextSize = 14
 killButton.Parent = mainFrame
 
 -- ==========================================================
--- VISUAL FOLDER
+-- VISUALS
 -- ==========================================================
 
 local visualFolder = Instance.new("Folder")
@@ -994,10 +990,6 @@ visualFolder.Name =
 	"PlayerTrackerVisuals"
 
 visualFolder.Parent = workspace
-
--- ==========================================================
--- TARGET HIGHLIGHT
--- ==========================================================
 
 local targetHighlight =
 	Instance.new("Highlight")
@@ -1025,14 +1017,9 @@ targetHighlight.OutlineTransparency = 0
 targetHighlight.Enabled = false
 targetHighlight.Parent = visualFolder
 
--- ==========================================================
--- TARGET MARKER
--- ==========================================================
-
 local marker = Instance.new("Part")
 
-marker.Name =
-	"PlayerTargetMarker"
+marker.Name = "PlayerTargetMarker"
 
 marker.Size =
 	Vector3.new(
@@ -1060,35 +1047,18 @@ marker.Color =
 marker.Transparency = 1
 marker.Parent = visualFolder
 
--- ==========================================================
--- BEAM
--- ==========================================================
-
 local playerAttachment =
 	Instance.new("Attachment")
-
-playerAttachment.Name =
-	"PlayerTrackerOrigin"
 
 local targetAttachment =
 	Instance.new("Attachment")
 
-targetAttachment.Name =
-	"PlayerTrackerDestination"
-
-targetAttachment.Parent =
-	marker
+targetAttachment.Parent = marker
 
 local beam = Instance.new("Beam")
 
-beam.Name =
-	"PlayerTrackerBeam"
-
-beam.Attachment0 =
-	playerAttachment
-
-beam.Attachment1 =
-	targetAttachment
+beam.Attachment0 = playerAttachment
+beam.Attachment1 = targetAttachment
 
 beam.Width0 = 0.35
 beam.Width1 = 0.35
@@ -1109,27 +1079,23 @@ beam.Enabled = false
 beam.Parent = visualFolder
 
 -- ==========================================================
--- VISUAL CONTROL
+-- VISUAL FUNCTIONS
 -- ==========================================================
 
 local function clearVisuals()
-
 	targetHighlight.Enabled = false
 	targetHighlight.Adornee = nil
 
 	marker.Transparency = 1
 
 	beam.Enabled = false
-
 	playerAttachment.Parent = nil
 end
 
 local function updateVisuals()
-
 	if not running
 		or not targetPlayer
 	then
-
 		clearVisuals()
 		return
 	end
@@ -1142,15 +1108,7 @@ local function updateVisuals()
 			targetPlayer
 		)
 
-	if not character
-		or not targetCharacter
-	then
-
-		clearVisuals()
-		return
-	end
-
-	local _, _, myRoot =
+	local _, _, root =
 		getCharacterState(
 			character
 		)
@@ -1160,10 +1118,9 @@ local function updateVisuals()
 			targetCharacter
 		)
 
-	if not myRoot
+	if not root
 		or not targetRoot
 	then
-
 		clearVisuals()
 		return
 	end
@@ -1183,18 +1140,16 @@ local function updateVisuals()
 
 	marker.Transparency = 0
 
-	playerAttachment.Parent =
-		myRoot
+	playerAttachment.Parent = root
 
 	beam.Enabled = true
 end
 
 -- ==========================================================
--- PATH CANCEL
+-- PATH CANCELLATION
 -- ==========================================================
 
 local function pathCancelled(player, token)
-
 	if not running then
 		return true
 	end
@@ -1207,11 +1162,15 @@ local function pathCancelled(player, token)
 		return true
 	end
 
+	if combatMode then
+		return true
+	end
+
 	return false
 end
 
 -- ==========================================================
--- PATHFINDING
+-- PATHFINDING WORKER
 -- ==========================================================
 
 local function walkToSelectedPlayer(
@@ -1261,7 +1220,6 @@ local function walkToSelectedPlayer(
 			or not targetHumanoid
 			or not targetRoot
 		then
-
 			setStatus(
 				"Waiting for character"
 			)
@@ -1278,39 +1236,29 @@ local function walkToSelectedPlayer(
 			).Magnitude
 
 		-- ==================================================
-		-- ARRIVAL
+		-- ENTER COMBAT BEFORE GETTING TOO CLOSE
 		-- ==================================================
 
-		if distance <= STOP_DISTANCE then
+		if distance <= COMBAT_ENTER_DISTANCE then
+			combatMode = true
 
+			-- Cancel old route immediately.
+			currentPathToken += 1
+
+			-- Stop path movement.
 			humanoid:Move(
 				Vector3.zero,
 				false
 			)
 
+			-- Stop path jumps.
+			humanoid.Jump = false
+
 			setStatus(
-				"Reached target"
+				"Combat range"
 			)
 
-			if HOLD_KEY_ENABLED
-				and not holdingArrivalKey
-			then
-
-				holdArrivalKey()
-			end
-
-			task.wait(0.1)
-
-			continue
-
-		else
-
-			if holdingArrivalKey then
-
-				arrivalKeyToken += 1
-
-				releaseArrivalKey()
-			end
+			break
 		end
 
 		local targetPosition =
@@ -1337,12 +1285,10 @@ local function walkToSelectedPlayer(
 
 		local success =
 			pcall(function()
-
 				path:ComputeAsync(
 					hrp.Position,
 					targetPosition
 				)
-
 			end)
 
 		if success
@@ -1353,11 +1299,13 @@ local function walkToSelectedPlayer(
 			local lastPosition =
 				hrp.Position
 
-			local stuckTimer =
-				0
+			local stuckTimer = 0
 
 			local waypoints =
 				path:GetWaypoints()
+
+			local needRepath =
+				false
 
 			setStatus(
 				"Path: "
@@ -1367,15 +1315,18 @@ local function walkToSelectedPlayer(
 					.. " nodes"
 			)
 
-			local needRepath =
-				false
-
 			for i, waypoint in ipairs(
 				waypoints
 			) do
-
 				if i == 1 then
 					continue
+				end
+
+				if pathCancelled(
+					selectedPlayer,
+					token
+				) then
+					break
 				end
 
 				character =
@@ -1400,14 +1351,41 @@ local function walkToSelectedPlayer(
 						targetCharacter
 					)
 
-				if pathCancelled(
-					selectedPlayer,
-					token
-				)
+				if not humanoid
 					or not hrp
-					or not humanoid
 					or not targetRoot
 				then
+					break
+				end
+
+				local combatDistance =
+					(
+						hrp.Position
+						- targetRoot.Position
+					).Magnitude
+
+				-- ==========================================
+				-- STOP PATHFINDING EARLY FOR COMBAT
+				-- ==========================================
+
+				if combatDistance
+					<= COMBAT_ENTER_DISTANCE
+				then
+					combatMode = true
+
+					currentPathToken += 1
+
+					humanoid:Move(
+						Vector3.zero,
+						false
+					)
+
+					humanoid.Jump =
+						false
+
+					setStatus(
+						"Combat range"
+					)
 
 					break
 				end
@@ -1415,7 +1393,6 @@ local function walkToSelectedPlayer(
 				if waypoint.Action
 					== Enum.PathWaypointAction.Jump
 				then
-
 					humanoid.Jump =
 						true
 				end
@@ -1439,7 +1416,6 @@ local function walkToSelectedPlayer(
 					and nodeTimeout
 						< NODE_TIMEOUT
 				do
-
 					character =
 						getMyCharacter()
 
@@ -1462,15 +1438,49 @@ local function walkToSelectedPlayer(
 							targetCharacter
 						)
 
+					if not humanoid
+						or not hrp
+						or not targetRoot
+					then
+						break
+					end
+
+					local combatDistanceNow =
+						(
+							hrp.Position
+							- targetRoot.Position
+						).Magnitude
+
+					-- ======================================
+					-- IMMEDIATE COMBAT TRANSITION
+					-- ======================================
+
+					if combatDistanceNow
+						<= COMBAT_ENTER_DISTANCE
+					then
+						combatMode = true
+
+						currentPathToken += 1
+
+						humanoid:Move(
+							Vector3.zero,
+							false
+						)
+
+						humanoid.Jump =
+							false
+
+						setStatus(
+							"Combat range"
+						)
+
+						break
+					end
+
 					if pathCancelled(
 						selectedPlayer,
 						token
-					)
-						or not hrp
-						or not humanoid
-						or not targetRoot
-					then
-
+					) then
 						break
 					end
 
@@ -1481,12 +1491,9 @@ local function walkToSelectedPlayer(
 					local arrivalDistance
 
 					if i == #waypoints then
-
 						arrivalDistance =
 							FINAL_NODE_DISTANCE
-
 					else
-
 						arrivalDistance =
 							NORMAL_NODE_DISTANCE
 					end
@@ -1494,31 +1501,27 @@ local function walkToSelectedPlayer(
 					if diffVector.Magnitude
 						<= arrivalDistance
 					then
-
 						reachedNode =
 							true
 
 						break
 					end
 
-					stuckTimer =
-						stuckTimer
-						+ 0.015
+					stuckTimer +=
+						0.015
 
 					if stuckTimer
 						>= STUCK_CHECK_TIME
 					then
-
-						local distanceMoved =
+						local moved =
 							(
 								hrp.Position
 								- lastPosition
 							).Magnitude
 
-						if distanceMoved
+						if moved
 							<= STUCK_DISTANCE
 						then
-
 							humanoid.Jump =
 								true
 
@@ -1532,35 +1535,16 @@ local function walkToSelectedPlayer(
 							if flat.Magnitude
 								> 0.001
 							then
-
-								local forwardVector =
+								local forward =
 									flat.Unit
 
 								for _ = 1, 20 do
-
-									character =
-										getMyCharacter()
-
-									char,
-										humanoid,
-										hrp =
-										getCharacterState(
-											character
-										)
-
-									if pathCancelled(
-										selectedPlayer,
-										token
-									)
-										or not humanoid
-										or not hrp
-									then
-
+									if combatMode then
 										break
 									end
 
 									humanoid:Move(
-										forwardVector,
+										forward,
 										false
 									)
 
@@ -1573,8 +1557,11 @@ local function walkToSelectedPlayer(
 						lastPosition =
 							hrp.Position
 
-						stuckTimer =
-							0
+						stuckTimer = 0
+					end
+
+					if combatMode then
+						break
 					end
 
 					local flatDirection =
@@ -1587,7 +1574,6 @@ local function walkToSelectedPlayer(
 					if flatDirection.Magnitude
 						> 0.001
 					then
-
 						humanoid:Move(
 							flatDirection.Unit,
 							false
@@ -1597,16 +1583,16 @@ local function walkToSelectedPlayer(
 					RunService.PostSimulation:
 						Wait()
 
-					nodeTimeout =
-						nodeTimeout
-						+ 0.015
+					nodeTimeout +=
+						0.015
 				end
 
-				if pathCancelled(
-					selectedPlayer,
-					token
-				) then
-
+				if combatMode
+					or pathCancelled(
+						selectedPlayer,
+						token
+					)
+				then
 					break
 				end
 
@@ -1623,7 +1609,6 @@ local function walkToSelectedPlayer(
 						)
 
 				if targetRoot then
-
 					local movement =
 						(
 							targetRoot.Position
@@ -1633,7 +1618,6 @@ local function walkToSelectedPlayer(
 					if movement
 						>= PATH_REPATH_DISTANCE
 					then
-
 						needRepath =
 							true
 
@@ -1642,29 +1626,21 @@ local function walkToSelectedPlayer(
 				end
 			end
 
-			if humanoid then
-
+			if humanoid and not combatMode then
 				humanoid:Move(
 					Vector3.zero,
 					false
 				)
 			end
 
-			if needRepath then
-
-				setStatus(
-					"Target moved - repathing"
-				)
-
-				task.wait(0.05)
-
-			else
-
-				task.wait(0.1)
+			if not combatMode then
+				if needRepath then
+					task.wait(0.05)
+				else
+					task.wait(0.1)
+				end
 			end
-
 		else
-
 			humanoid:Move(
 				Vector3.zero,
 				false
@@ -1678,8 +1654,167 @@ local function walkToSelectedPlayer(
 		end
 	end
 
-	pathWorkerRunning =
-		false
+	pathWorkerRunning = false
+end
+
+-- ==========================================================
+-- START PATHFINDING
+-- ==========================================================
+
+local function startPathfinding()
+	if not targetPlayer
+		or combatMode
+		or pathWorkerRunning
+	then
+		return
+	end
+
+	currentPathToken += 1
+
+	local token =
+		currentPathToken
+
+	task.spawn(
+		walkToSelectedPlayer,
+		targetPlayer,
+		token
+	)
+end
+
+-- ==========================================================
+-- COMBAT CONTROL
+-- ==========================================================
+
+local function updateCombatMode()
+	if not running
+		or not targetPlayer
+	then
+		return
+	end
+
+	local character =
+		getMyCharacter()
+
+	local targetCharacter =
+		getTargetCharacter(
+			targetPlayer
+		)
+
+	local _,
+		humanoid,
+		root =
+		getCharacterState(
+			character
+		)
+
+	local _,
+		targetHumanoid,
+		targetRoot =
+		getCharacterState(
+			targetCharacter
+		)
+
+	if not humanoid
+		or not root
+		or not targetHumanoid
+		or not targetRoot
+	then
+		return
+	end
+
+	local difference =
+		targetRoot.Position
+		- root.Position
+
+	local distance =
+		difference.Magnitude
+
+	-- ======================================================
+	-- ENTER COMBAT MODE
+	-- ======================================================
+
+	if not combatMode
+		and distance <= COMBAT_ENTER_DISTANCE
+	then
+		combatMode = true
+
+		-- Cancel path immediately.
+		currentPathToken += 1
+
+		-- Remove path movement.
+		humanoid:Move(
+			Vector3.zero,
+			false
+		)
+
+		-- Absolutely stop jumping.
+		humanoid.Jump = false
+
+		setStatus(
+			"COMBAT - attacking"
+		)
+	end
+
+	-- ======================================================
+	-- COMBAT MODE
+	-- ======================================================
+
+	if combatMode then
+		-- Prevent pathfinding jump behavior.
+		humanoid.Jump = false
+
+		-- If the target escaped, resume pathfinding.
+		if distance >= COMBAT_EXIT_DISTANCE then
+			combatMode = false
+
+			arrivalKeyToken += 1
+			releaseArrivalKey()
+
+			setStatus(
+				"Target moved away"
+			)
+
+			startPathfinding()
+
+			return
+		end
+
+		-- ==============================================
+		-- TOO FAR INSIDE COMBAT ZONE
+		--
+		-- Move directly a little closer.
+		-- This is deliberately NOT pathfinding.
+		-- ==============================================
+
+		if distance > COMBAT_HOLD_DISTANCE then
+			local flat =
+				Vector3.new(
+					difference.X,
+					0,
+					difference.Z
+				)
+
+			if flat.Magnitude > 0.05 then
+				humanoid:Move(
+					flat.Unit,
+					false
+				)
+			end
+		else
+			-- Close enough to hit:
+			-- stop movement completely.
+			humanoid:Move(
+				Vector3.zero,
+				false
+			)
+
+			if HOLD_KEY_ENABLED
+				and not holdingArrivalKey
+			then
+				holdArrivalKey()
+			end
+		end
+	end
 end
 
 -- ==========================================================
@@ -1687,33 +1822,25 @@ end
 -- ==========================================================
 
 local function startTracking(player)
-
 	arrivalKeyToken += 1
 	releaseArrivalKey()
 
 	currentPathToken += 1
 
+	combatMode = false
+
 	targetPlayer = player
 
 	if not player then
-
 		setStatus("Idle")
-
 		return
 	end
-
-	local token =
-		currentPathToken
 
 	setStatus(
 		"Starting path"
 	)
 
-	task.spawn(
-		walkToSelectedPlayer,
-		player,
-		token
-	)
+	startPathfinding()
 end
 
 -- ==========================================================
@@ -1721,11 +1848,9 @@ end
 -- ==========================================================
 
 local function updatePlayerList()
-
 	for _, child in ipairs(
 		playerScroller:GetChildren()
 	) do
-
 		if child:IsA("TextButton") then
 			child:Destroy()
 		end
@@ -1734,9 +1859,7 @@ local function updatePlayerList()
 	for _, player in ipairs(
 		Players:GetPlayers()
 	) do
-
 		if player ~= localPlayer then
-
 			local button =
 				Instance.new(
 					"TextButton"
@@ -1768,16 +1891,13 @@ local function updatePlayerList()
 			button.BorderSizePixel = 0
 
 			if targetPlayer == player then
-
 				button.BackgroundColor3 =
 					Color3.fromRGB(
 						0,
 						145,
 						80
 					)
-
 			else
-
 				button.BackgroundColor3 =
 					Color3.fromRGB(
 						58,
@@ -1791,19 +1911,17 @@ local function updatePlayerList()
 
 			button.MouseButton1Click:
 				Connect(function()
-
 					if targetPlayer
 						== player
 					then
-
 						arrivalKeyToken += 1
 
 						releaseArrivalKey()
 
 						currentPathToken += 1
 
-						targetPlayer =
-							nil
+						combatMode = false
+						targetPlayer = nil
 
 						local character =
 							getMyCharacter()
@@ -1815,6 +1933,7 @@ local function updatePlayerList()
 							)
 
 						if humanoid then
+							humanoid.Jump = false
 
 							humanoid:Move(
 								Vector3.zero,
@@ -1825,9 +1944,7 @@ local function updatePlayerList()
 						setStatus(
 							"Idle"
 						)
-
 					else
-
 						startTracking(
 							player
 						)
@@ -1839,7 +1956,6 @@ local function updatePlayerList()
 	end
 
 	task.defer(function()
-
 		playerScroller.CanvasSize =
 			UDim2.new(
 				0,
@@ -1848,7 +1964,6 @@ local function updatePlayerList()
 				playerLayout.AbsoluteContentSize.Y
 				+ 5
 			)
-
 	end)
 end
 
@@ -1857,11 +1972,9 @@ end
 -- ==========================================================
 
 local function updateToolList()
-
 	for _, child in ipairs(
 		toolScroller:GetChildren()
 	) do
-
 		if child:IsA("TextButton") then
 			child:Destroy()
 		end
@@ -1870,7 +1983,6 @@ local function updateToolList()
 	local shown = {}
 
 	local function scan(container)
-
 		if not container then
 			return
 		end
@@ -1878,13 +1990,11 @@ local function updateToolList()
 		for _, object in ipairs(
 			container:GetChildren()
 		) do
-
 			if object:IsA("Tool")
 				and not shown[
 					object.Name
 				]
 			then
-
 				shown[
 					object.Name
 				] = true
@@ -1908,8 +2018,7 @@ local function updateToolList()
 				button.Font =
 					Enum.Font.SourceSans
 
-				button.TextSize =
-					14
+				button.TextSize = 14
 
 				button.TextColor3 =
 					Color3.fromRGB(
@@ -1918,22 +2027,18 @@ local function updateToolList()
 						255
 					)
 
-				button.BorderSizePixel =
-					0
+				button.BorderSizePixel = 0
 
 				if selectedToolName
 					== object.Name
 				then
-
 					button.BackgroundColor3 =
 						Color3.fromRGB(
 							0,
 							110,
 							180
 						)
-
 				else
-
 					button.BackgroundColor3 =
 						Color3.fromRGB(
 							58,
@@ -1947,16 +2052,12 @@ local function updateToolList()
 
 				button.MouseButton1Click:
 					Connect(function()
-
 						if selectedToolName
 							== object.Name
 						then
-
 							selectedToolName =
 								nil
-
 						else
-
 							selectedToolName =
 								object.Name
 						end
@@ -1979,7 +2080,6 @@ local function updateToolList()
 	)
 
 	task.defer(function()
-
 		toolScroller.CanvasSize =
 			UDim2.new(
 				0,
@@ -1988,7 +2088,6 @@ local function updateToolList()
 				toolLayout.AbsoluteContentSize.Y
 				+ 5
 			)
-
 	end)
 end
 
@@ -1996,10 +2095,7 @@ end
 -- WEAPON SYSTEM
 -- ==========================================================
 
-local lastAttack = 0
-
 local function updateWeapon()
-
 	if not running
 		or not targetPlayer
 		or not selectedToolName
@@ -2034,7 +2130,6 @@ local function updateWeapon()
 		or not targetHumanoid
 		or not targetRoot
 	then
-
 		return
 	end
 
@@ -2045,7 +2140,6 @@ local function updateWeapon()
 			)
 
 	if not tool then
-
 		local backpack =
 			localPlayer:
 				FindFirstChild(
@@ -2067,7 +2161,6 @@ local function updateWeapon()
 	if not tool
 		or not tool:IsA("Tool")
 	then
-
 		return
 	end
 
@@ -2078,20 +2171,14 @@ local function updateWeapon()
 		).Magnitude
 
 	if distance <= ATTACK_RANGE then
-
 		local now =
 			os.clock()
 
-		if now - lastAttack
-			>= 0.25
-		then
-
+		if now - lastAttack >= 0.18 then
 			lastAttack = now
 
 			pcall(function()
-
 				tool:Activate()
-
 			end)
 		end
 	end
@@ -2102,12 +2189,13 @@ end
 -- ==========================================================
 
 local function stopTracking()
-
 	arrivalKeyToken += 1
 
 	releaseArrivalKey()
 
 	currentPathToken += 1
+
+	combatMode = false
 
 	targetPlayer = nil
 	selectedToolName = nil
@@ -2124,6 +2212,7 @@ local function stopTracking()
 		)
 
 	if humanoid then
+		humanoid.Jump = false
 
 		humanoid:Move(
 			Vector3.zero,
@@ -2132,7 +2221,6 @@ local function stopTracking()
 	end
 
 	if character then
-
 		local equipped =
 			character:
 				FindFirstChildOfClass(
@@ -2148,7 +2236,6 @@ local function stopTracking()
 		if equipped
 			and backpack
 		then
-
 			equipped.Parent =
 				backpack
 		end
@@ -2168,34 +2255,31 @@ stopButton.MouseButton1Click:
 	)
 
 -- ==========================================================
--- VISUAL LOOP
+-- MAIN HEARTBEAT
 -- ==========================================================
 
 trackConnection(
-
-	RunService.RenderStepped:
+	RunService.Heartbeat:
 		Connect(function()
-
-			if running then
-				updateVisuals()
+			if not running then
+				return
 			end
 
+			updateCombatMode()
+			updateWeapon()
 		end)
 )
 
 -- ==========================================================
--- ATTACK LOOP
+-- VISUAL LOOP
 -- ==========================================================
 
 trackConnection(
-
-	RunService.Heartbeat:
+	RunService.RenderStepped:
 		Connect(function()
-
 			if running then
-				updateWeapon()
+				updateVisuals()
 			end
-
 		end)
 )
 
@@ -2204,7 +2288,6 @@ trackConnection(
 -- ==========================================================
 
 trackConnection(
-
 	UserInputService.InputBegan:
 		Connect(function(
 			input,
@@ -2218,10 +2301,8 @@ trackConnection(
 			if input.KeyCode
 				== Enum.KeyCode.X
 			then
-
 				stopTracking()
 			end
-
 		end)
 )
 
@@ -2230,30 +2311,25 @@ trackConnection(
 -- ==========================================================
 
 trackConnection(
-
 	Players.PlayerAdded:
 		Connect(function()
-
 			updatePlayerList()
-
 		end)
 )
 
 trackConnection(
-
 	Players.PlayerRemoving:
 		Connect(function(player)
-
 			if targetPlayer
 				== player
 			then
-
 				arrivalKeyToken += 1
 
 				releaseArrivalKey()
 
 				currentPathToken += 1
 
+				combatMode = false
 				targetPlayer = nil
 
 				clearVisuals()
@@ -2264,7 +2340,6 @@ trackConnection(
 			end
 
 			updatePlayerList()
-
 		end)
 )
 
@@ -2279,26 +2354,20 @@ local backpack =
 		)
 
 trackConnection(
-
 	backpack.ChildAdded:
 		Connect(function()
-
 			task.defer(
 				updateToolList
 			)
-
 		end)
 )
 
 trackConnection(
-
 	backpack.ChildRemoved:
 		Connect(function()
-
 			task.defer(
 				updateToolList
 			)
-
 		end)
 )
 
@@ -2307,7 +2376,6 @@ trackConnection(
 -- ==========================================================
 
 local function cleanup()
-
 	if not running then
 		return
 	end
@@ -2320,6 +2388,7 @@ local function cleanup()
 
 	currentPathToken += 1
 
+	combatMode = false
 	targetPlayer = nil
 	selectedToolName = nil
 
@@ -2333,6 +2402,7 @@ local function cleanup()
 		)
 
 	if humanoid then
+		humanoid.Jump = false
 
 		humanoid:Move(
 			Vector3.zero,
@@ -2343,29 +2413,22 @@ local function cleanup()
 	for _, connection in ipairs(
 		connections
 	) do
-
 		pcall(function()
-
 			connection:
 				Disconnect()
-
 		end)
 	end
 
-	table.clear(
-		connections
-	)
+	table.clear(connections)
 
 	clearVisuals()
 
 	if visualFolder then
-		visualFolder:
-			Destroy()
+		visualFolder:Destroy()
 	end
 
 	if screenGui then
-		screenGui:
-			Destroy()
+		screenGui:Destroy()
 	end
 
 	_G.PlayerTrackerCleanup = nil
@@ -2390,13 +2453,12 @@ killButton.MouseButton1Click:
 updatePlayerList()
 updateToolList()
 
-setStatus(
-	"Idle"
-)
+setStatus("Idle")
 
 print("====================================")
 print("Player Tracker loaded.")
-print("Arrival key controlled from GUI.")
-print("Hold duration controlled from GUI.")
+print("Pathfinding stops in combat range.")
+print("Jumping stops in combat range.")
+print("Close-range movement enabled.")
 print("Press X to stop.")
 print("====================================")
