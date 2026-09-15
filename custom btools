@@ -1,497 +1,2078 @@
--- PART 1: Draggable HUD Layout & Handles Configuration
+-- ==========================================================
+-- PART 1: DRAGGABLE HUD LAYOUT & HANDLES CONFIGURATION
+-- ==========================================================
+
 local Players = game:GetService("Players")
+
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local camera = workspace.CurrentCamera
 
--- Global Configurations Table
+-- ==========================================================
+-- CONFIG
+-- ==========================================================
+
 getgenv().CustomBToolsConfig = {
 	Active = true,
+
 	SelectedInstance = nil,
 	SelectedGroup = {},
+
 	HoverInstance = nil,
-	CurrentMode = "Select", -- Modes: Select, Move, Scale, Rotate
+
+	CurrentMode = "Select",
+
 	Increment = 1
 }
 
--- Clear old duplicates out of memory profiles
-if playerGui:FindFirstChild("BToolsDashboard") then playerGui.BToolsDashboard:Destroy() end
-if player.Backpack:FindFirstChild("Custom BTools") then player.Backpack["Custom BTools"]:Destroy() end
-if player.Character and player.Character:FindFirstChild("Custom BTools") then player.Character["Custom BTools"]:Destroy() end
+local config = getgenv().CustomBToolsConfig
+
+-- ==========================================================
+-- CLEAN OLD VERSION
+-- ==========================================================
+
+if playerGui:FindFirstChild("BToolsDashboard") then
+	playerGui.BToolsDashboard:Destroy()
+end
+
+if player.Backpack:FindFirstChild("Custom BTools") then
+	player.Backpack["Custom BTools"]:Destroy()
+end
+
+if player.Character
+	and player.Character:FindFirstChild("Custom BTools")
+then
+	player.Character["Custom BTools"]:Destroy()
+end
+
+-- ==========================================================
+-- SCREEN GUI
+-- ==========================================================
 
 local screenGui = Instance.new("ScreenGui")
+
 screenGui.Name = "BToolsDashboard"
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
--- Screen space box drag framework
+-- ==========================================================
+-- BOX SELECT VISUAL
+-- ==========================================================
+
 local dragBox = Instance.new("Frame")
+
 dragBox.Name = "ClientDragBox"
-dragBox.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+
+dragBox.BackgroundColor3 =
+	Color3.fromRGB(
+		0,
+		170,
+		255
+	)
+
 dragBox.BackgroundTransparency = 0.8
-dragBox.BorderColor3 = Color3.fromRGB(0, 215, 255)
+
+dragBox.BorderColor3 =
+	Color3.fromRGB(
+		0,
+		215,
+		255
+	)
+
 dragBox.BorderSizePixel = 2
+
 dragBox.Visible = false
+
 dragBox.Parent = screenGui
 
--- Draggable Left HUD Dashboard Window Panel
+-- ==========================================================
+-- MAIN FRAME
+-- ==========================================================
+
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 240, 0, 285)
-frame.Position = UDim2.new(0, 20, 0.35, 0)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-frame.Visible = false 
+
+frame.Size =
+	UDim2.new(
+		0,
+		240,
+		0,
+		285
+	)
+
+frame.Position =
+	UDim2.new(
+		0,
+		20,
+		0.35,
+		0
+	)
+
+frame.BackgroundColor3 =
+	Color3.fromRGB(
+		20,
+		20,
+		25
+	)
+
+frame.Visible = false
+
 frame.Active = true
 frame.Draggable = true
+
 frame.Parent = screenGui
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+local frameCorner =
+	Instance.new(
+		"UICorner",
+		frame
+	)
+
+frameCorner.CornerRadius =
+	UDim.new(
+		0,
+		8
+	)
+
+-- ==========================================================
+-- TITLE
+-- ==========================================================
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 35)
-title.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-title.TextColor3 = Color3.fromRGB(0, 215, 255)
-title.Font = Enum.Font.SourceSansBold
+
+title.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		35
+	)
+
+title.BackgroundColor3 =
+	Color3.fromRGB(
+		30,
+		30,
+		38
+	)
+
+title.TextColor3 =
+	Color3.fromRGB(
+		0,
+		215,
+		255
+	)
+
+title.Font =
+	Enum.Font.SourceSansBold
+
 title.TextSize = 13
-title.Text = "CUSTOM BUILDING CORE"
+
+title.Text =
+	"CUSTOM BUILDING CORE"
+
 title.Parent = frame
-Instance.new("UICorner", title).CornerRadius = UDim.new(0, 8)
+
+local titleCorner =
+	Instance.new(
+		"UICorner",
+		title
+	)
+
+titleCorner.CornerRadius =
+	UDim.new(
+		0,
+		8
+	)
+
+-- ==========================================================
+-- TARGET TEXT
+-- ==========================================================
 
 local targetText = Instance.new("TextLabel")
-targetText.Size = UDim2.new(1, -20, 0, 25)
-targetText.Position = UDim2.new(0, 10, 0, 40)
+
+targetText.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		25
+	)
+
+targetText.Position =
+	UDim2.new(
+		0,
+		10,
+		0,
+		40
+	)
+
 targetText.BackgroundTransparency = 1
-targetText.TextColor3 = Color3.fromRGB(255, 170, 0)
-targetText.Font = Enum.Font.SourceSansBold
+
+targetText.TextColor3 =
+	Color3.fromRGB(
+		255,
+		170,
+		0
+	)
+
+targetText.Font =
+	Enum.Font.SourceSansBold
+
 targetText.TextSize = 12
-targetText.TextXAlignment = Enum.TextXAlignment.Left
-targetText.Text = "Selected: None"
+
+targetText.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+targetText.Text =
+	"Selected: None"
+
 targetText.Parent = frame
 
+-- ==========================================================
+-- MODE TEXT
+-- ==========================================================
+
 local modeText = Instance.new("TextLabel")
-modeText.Size = UDim2.new(1, -20, 0, 25)
-modeText.Position = UDim2.new(0, 10, 0, 60)
+
+modeText.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		25
+	)
+
+modeText.Position =
+	UDim2.new(
+		0,
+		10,
+		0,
+		60
+	)
+
 modeText.BackgroundTransparency = 1
-modeText.TextColor3 = Color3.fromRGB(0, 215, 255)
-modeText.Font = Enum.Font.SourceSansBold
+
+modeText.TextColor3 =
+	Color3.fromRGB(
+		0,
+		215,
+		255
+	)
+
+modeText.Font =
+	Enum.Font.SourceSansBold
+
 modeText.TextSize = 12
-modeText.TextXAlignment = Enum.TextXAlignment.Left
-modeText.Text = "Mode: SELECT POINTER"
+
+modeText.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+modeText.Text =
+	"Mode: SELECT POINTER"
+
 modeText.Parent = frame
 
-local instructions = Instance.new("TextLabel")
-instructions.Size = UDim2.new(1, -20, 0, 60)
-instructions.Position = UDim2.new(0, 10, 0, 80)
+-- ==========================================================
+-- INSTRUCTIONS
+-- ==========================================================
+
+local instructions =
+	Instance.new(
+		"TextLabel"
+	)
+
+instructions.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		60
+	)
+
+instructions.Position =
+	UDim2.new(
+		0,
+		10,
+		0,
+		80
+	)
+
 instructions.BackgroundTransparency = 1
-instructions.TextColor3 = Color3.fromRGB(150, 150, 150)
-instructions.Font = Enum.Font.SourceSansItalic
+
+instructions.TextColor3 =
+	Color3.fromRGB(
+		150,
+		150,
+		150
+	)
+
+instructions.Font =
+	Enum.Font.SourceSansItalic
+
 instructions.TextSize = 11
+
 instructions.TextWrapped = true
-instructions.TextXAlignment = Enum.TextXAlignment.Left
-instructions.Text = "Hotkeys:\n[Z] Pointer | [X] Move Arrows | [C] Scale Dots | [V] Rotate Wheels\nHold [LeftShift] + Drag Mouse to box-select parts."
+
+instructions.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+instructions.Text =
+	"Hotkeys:\n"
+	.. "[Z] Pointer | [X] Move Arrows | "
+	.. "[C] Scale Dots | [V] Rotate Wheels\n"
+	.. "Scale bubbles resize FROM the face you pull.\n"
+	.. "Hold [LeftShift] + Drag Mouse to box-select."
+
 instructions.Parent = frame
 
--- Adornment Widgets Configuration
-local moveHandles = Instance.new("Handles")
-moveHandles.Name = "BToolsMoveArrows"
-moveHandles.Color3 = Color3.fromRGB(0, 255, 255)
+-- ==========================================================
+-- MOVE HANDLES
+-- ==========================================================
+
+local moveHandles =
+	Instance.new("Handles")
+
+moveHandles.Name =
+	"BToolsMoveArrows"
+
+moveHandles.Color3 =
+	Color3.fromRGB(
+		0,
+		255,
+		255
+	)
+
+moveHandles.Style =
+	Enum.HandlesStyle.Movement
+
 moveHandles.Visible = false
+
 moveHandles.Parent = screenGui
 
-local scaleHandles = Instance.new("Handles")
-scaleHandles.Name = "BToolsScaleDots"
-scaleHandles.Color3 = Color3.fromRGB(0, 255, 100)
-scaleHandles.Style = Enum.HandlesStyle.Resize
+-- ==========================================================
+-- SCALE HANDLES
+-- ==========================================================
+
+local scaleHandles =
+	Instance.new("Handles")
+
+scaleHandles.Name =
+	"BToolsScaleDots"
+
+scaleHandles.Color3 =
+	Color3.fromRGB(
+		0,
+		255,
+		100
+	)
+
+scaleHandles.Style =
+	Enum.HandlesStyle.Resize
+
 scaleHandles.Visible = false
+
 scaleHandles.Parent = screenGui
 
-local rotateHandles = Instance.new("ArcHandles")
-rotateHandles.Name = "BToolsRotateWheels"
-rotateHandles.Color3 = Color3.fromRGB(255, 200, 0)
+-- ==========================================================
+-- ROTATION HANDLES
+-- ==========================================================
+
+local rotateHandles =
+	Instance.new("ArcHandles")
+
+rotateHandles.Name =
+	"BToolsRotateWheels"
+
+rotateHandles.Color3 =
+	Color3.fromRGB(
+		255,
+		200,
+		0
+	)
+
 rotateHandles.Visible = false
+
 rotateHandles.Parent = screenGui
 
-local selectionHighlight = Instance.new("SelectionBox")
-selectionHighlight.Name = "BToolsClientHighlight"
-selectionHighlight.Color3 = Color3.fromRGB(0, 255, 255) 
-selectionHighlight.LineThickness = 0.04
-selectionHighlight.Parent = camera
+-- ==========================================================
+-- SELECTION BOX
+-- ==========================================================
 
-local uninstallBtn = Instance.new("TextButton")
-uninstallBtn.Size = UDim2.new(1, -20, 0, 30)
-uninstallBtn.Position = UDim2.new(0, 10, 1, -45)
-uninstallBtn.BackgroundColor3 = Color3.fromRGB(120, 20, 20) 
-uninstallBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-uninstallBtn.Font = Enum.Font.SourceSansBold
+local selectionHighlight =
+	Instance.new("SelectionBox")
+
+selectionHighlight.Name =
+	"BToolsClientHighlight"
+
+selectionHighlight.Color3 =
+	Color3.fromRGB(
+		0,
+		255,
+		255
+	)
+
+selectionHighlight.LineThickness =
+	0.04
+
+selectionHighlight.Parent =
+	camera
+
+-- ==========================================================
+-- UNINSTALL BUTTON
+-- ==========================================================
+
+local uninstallBtn =
+	Instance.new("TextButton")
+
+uninstallBtn.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		30
+	)
+
+uninstallBtn.Position =
+	UDim2.new(
+		0,
+		10,
+		1,
+		-45
+	)
+
+uninstallBtn.BackgroundColor3 =
+	Color3.fromRGB(
+		120,
+		20,
+		20
+	)
+
+uninstallBtn.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+uninstallBtn.Font =
+	Enum.Font.SourceSansBold
+
 uninstallBtn.TextSize = 13
-uninstallBtn.Text = "CLOSE AND WIPE GUI"
-uninstallBtn.Parent = frame
-Instance.new("UICorner", uninstallBtn).CornerRadius = UDim.new(0, 6)
 
--- Share instance references with Part 2 and Part 3 loop contexts
+uninstallBtn.Text =
+	"CLOSE AND WIPE GUI"
+
+uninstallBtn.Parent =
+	frame
+
+local uninstallCorner =
+	Instance.new(
+		"UICorner",
+		uninstallBtn
+	)
+
+uninstallCorner.CornerRadius =
+	UDim.new(
+		0,
+		6
+	)
+
+-- ==========================================================
+-- SHARED UI TABLE
+-- ==========================================================
+
 getgenv().AsylumBToolsUI = {
 	ScreenGui = screenGui,
+
 	Frame = frame,
+
 	DragBox = dragBox,
+
 	TargetText = targetText,
+
 	ModeText = modeText,
+
 	MoveHandles = moveHandles,
+
 	ScaleHandles = scaleHandles,
+
 	RotateHandles = rotateHandles,
+
 	SelectionHighlight = selectionHighlight,
+
 	UninstallButton = uninstallBtn
 }
-print("Part 1: Restored control HUD layout completely drawn.")
--- PART 2: Transform Math & Interface Callbacks Core
-local ui = getgenv().AsylumBToolsUI
-local config = getgenv().CustomBToolsConfig
+
+print("Part 1 loaded.")
+
+-- ==========================================================
+-- PART 2: TRANSFORM CORE
+-- ==========================================================
+
+local ui =
+	getgenv().AsylumBToolsUI
+
+config =
+	getgenv().CustomBToolsConfig
 
 if not ui or not config then
-	warn("ERROR: Missing dependencies! Part 1 must run first.")
+	warn(
+		"ERROR: Missing BTools dependencies."
+	)
+
 	return
 end
+
+-- ==========================================================
+-- INTERNAL STATE
+-- ==========================================================
 
 getgenv().BToolsInternalState = {
 	IsManipulating = false,
+
 	CurrentHandleFace = nil,
+
 	InitialCFrames = {},
+
 	InitialSizes = {},
+
 	ActiveHighlights = {},
+
 	BtoolsConnections = {}
 }
 
-local state = getgenv().BToolsInternalState
-local camera = workspace.CurrentCamera
+local state =
+	getgenv().BToolsInternalState
 
-getgenv().ClearBToolsGroupHighlights = function()
-	for _, hl in ipairs(state.ActiveHighlights) do pcall(function() hl:Destroy() end) end
-	state.ActiveHighlights = {}
+camera =
+	workspace.CurrentCamera
+
+-- ==========================================================
+-- CLEAR GROUP HIGHLIGHTS
+-- ==========================================================
+
+getgenv().ClearBToolsGroupHighlights =
+	function()
+
+		for _, highlight in ipairs(
+			state.ActiveHighlights
+		) do
+
+			pcall(function()
+				highlight:Destroy()
+			end)
+		end
+
+		state.ActiveHighlights = {}
+	end
+
+-- ==========================================================
+-- GET CURRENT TARGETS
+-- ==========================================================
+
+local function getTargets()
+	local targets = {}
+
+	if #config.SelectedGroup > 0 then
+		for _, part in ipairs(
+			config.SelectedGroup
+		) do
+
+			if part
+				and part.Parent
+				and part:IsA("BasePart")
+			then
+				table.insert(
+					targets,
+					part
+				)
+			end
+		end
+
+	elseif config.SelectedInstance
+		and typeof(
+			config.SelectedInstance
+		) == "Instance"
+		and config.SelectedInstance:
+			IsA("BasePart")
+	then
+
+		table.insert(
+			targets,
+			config.SelectedInstance
+		)
+	end
+
+	return targets
 end
+
+-- ==========================================================
+-- GROUP HIGHLIGHTS
+-- ==========================================================
 
 local function applyGroupHighlights()
+
 	getgenv().ClearBToolsGroupHighlights()
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {config.SelectedInstance}
-	for _, part in ipairs(targets) do
-		if part and part.Parent and part:IsA("BasePart") then
-			local hl = Instance.new("SelectionBox")
-			hl.Color3 = Color3.fromRGB(255, 170, 0)
-			hl.LineThickness = 0.03
-			hl.Adornee = part
-			hl.Parent = camera
-			table.insert(state.ActiveHighlights, hl)
+
+	for _, part in ipairs(
+		getTargets()
+	) do
+
+		local highlight =
+			Instance.new(
+				"SelectionBox"
+			)
+
+		highlight.Color3 =
+			Color3.fromRGB(
+				255,
+				170,
+				0
+			)
+
+		highlight.LineThickness =
+			0.03
+
+		highlight.Adornee =
+			part
+
+		highlight.Parent =
+			camera
+
+		table.insert(
+			state.ActiveHighlights,
+			highlight
+		)
+	end
+end
+
+-- ==========================================================
+-- GET PRIMARY PART
+-- ==========================================================
+
+local function getPrimaryPart()
+
+	if config.SelectedInstance
+		and typeof(
+			config.SelectedInstance
+		) == "Instance"
+		and config.SelectedInstance:
+			IsA("BasePart")
+	then
+
+		return config.SelectedInstance
+	end
+
+	if #config.SelectedGroup > 0 then
+
+		local part =
+			config.SelectedGroup[1]
+
+		if part
+			and part.Parent
+			and part:IsA("BasePart")
+		then
+
+			return part
 		end
 	end
+
+	return nil
 end
 
-getgenv().UpdateBToolsHandleVisibility = function()
-	local part = config.SelectedInstance
-	if part and part.Parent and type(part) ~= "table" and config.CurrentMode ~= "Select" then
-		ui.SelectionHighlight.Adornee = part
-		ui.SelectionHighlight.Color3 = Color3.fromRGB(255, 170, 0)
-		applyGroupHighlights()
-		
-		ui.MoveHandles.Adornee = (config.CurrentMode == "Move") and part or nil
-		ui.MoveHandles.Visible = (config.CurrentMode == "Move")
-		ui.ScaleHandles.Adornee = (config.CurrentMode == "Scale") and part or nil
-		ui.ScaleHandles.Visible = (config.CurrentMode == "Scale")
-		ui.RotateHandles.Adornee = (config.CurrentMode == "Rotate") and part or nil
-		ui.RotateHandles.Visible = (config.CurrentMode == "Rotate")
-	else
-		ui.MoveHandles.Adornee = nil ui.MoveHandles.Visible = false
-		ui.ScaleHandles.Adornee = nil ui.ScaleHandles.Visible = false
-		ui.RotateHandles.Adornee = nil ui.RotateHandles.Visible = false
-		if not part then ui.SelectionHighlight.Adornee = nil getgenv().ClearBToolsGroupHighlights() end
-	end
-end
+-- ==========================================================
+-- UPDATE HANDLE VISIBILITY
+-- ==========================================================
 
-getgenv().StartTrackingTransforms = function()
-	state.IsManipulating = true
-	state.InitialCFrames = {}
-	state.InitialSizes = {}
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {config.SelectedInstance}
-	for _, p in ipairs(targets) do
-		if p and p.Parent and p:IsA("BasePart") then
-			state.InitialCFrames[p] = p.CFrame
-			state.InitialSizes[p] = p.Size
-		end
-	end
-end
+getgenv().UpdateBToolsHandleVisibility =
+	function()
 
-getgenv().StopTrackingTransforms = function()
-	state.IsManipulating = false
-	state.CurrentHandleFace = nil
-	state.InitialCFrames = {}
-	state.InitialSizes = {}
-end
+		local part =
+			getPrimaryPart()
 
-getgenv().ProcessHandleDragDelta = function(face, distance)
-	if not state.IsManipulating or not config.SelectedInstance then return end
-	local primary = config.SelectedInstance
-	if type(primary) == "table" or not primary:IsA("BasePart") then return end
-	
-	local snapDist = math.floor(distance / config.Increment + 0.5) * config.Increment
-	local normalVector = Vector3.FromNormalId(face)
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {primary}
-	
-	if config.CurrentMode == "Move" then
-		if state.InitialCFrames[primary] then
-			local worldDelta = state.InitialCFrames[primary]:VectorToWorldSpace(normalVector * snapDist)
-			for _, p in ipairs(targets) do
-				if state.InitialCFrames[p] then p.CFrame = state.InitialCFrames[p] + worldDelta end
+		if part
+			and part.Parent
+			and config.CurrentMode
+				~= "Select"
+		then
+
+			ui.SelectionHighlight.Adornee =
+				part
+
+			ui.SelectionHighlight.Color3 =
+				Color3.fromRGB(
+					255,
+					170,
+					0
+				)
+
+			applyGroupHighlights()
+
+			ui.MoveHandles.Adornee =
+				(
+					config.CurrentMode
+					== "Move"
+				)
+				and part
+				or nil
+
+			ui.MoveHandles.Visible =
+				config.CurrentMode
+				== "Move"
+
+			ui.ScaleHandles.Adornee =
+				(
+					config.CurrentMode
+					== "Scale"
+				)
+				and part
+				or nil
+
+			ui.ScaleHandles.Visible =
+				config.CurrentMode
+				== "Scale"
+
+			ui.RotateHandles.Adornee =
+				(
+					config.CurrentMode
+					== "Rotate"
+				)
+				and part
+				or nil
+
+			ui.RotateHandles.Visible =
+				config.CurrentMode
+				== "Rotate"
+
+		else
+
+			ui.MoveHandles.Adornee =
+				nil
+
+			ui.MoveHandles.Visible =
+				false
+
+			ui.ScaleHandles.Adornee =
+				nil
+
+			ui.ScaleHandles.Visible =
+				false
+
+			ui.RotateHandles.Adornee =
+				nil
+
+			ui.RotateHandles.Visible =
+				false
+
+			if not part then
+
+				ui.SelectionHighlight.Adornee =
+					nil
+
+				getgenv().
+					ClearBToolsGroupHighlights()
 			end
 		end
-	elseif config.CurrentMode == "Scale" then
-		local origSize = state.InitialSizes[primary]
-		local origCFrame = state.InitialCFrames[primary]
-		if origSize and origCFrame then
-			local sizeChange = normalVector * snapDist
-			local newSize = origSize + Vector3.new(math.abs(sizeChange.X), math.abs(sizeChange.Y), math.abs(sizeChange.Z))
-			if newSize.X > 0.05 and newSize.Y > 0.05 and newSize.Z > 0.05 then
-				primary.Size = newSize
-				primary.CFrame = origCFrame * CFrame.new(normalVector * (snapDist / 2))
-			end
+	end
+
+-- ==========================================================
+-- BEGIN TRANSFORM
+-- ==========================================================
+
+getgenv().StartTrackingTransforms =
+	function(face)
+
+		state.IsManipulating =
+			true
+
+		state.CurrentHandleFace =
+			face
+
+		state.InitialCFrames =
+			{}
+
+		state.InitialSizes =
+			{}
+
+		for _, part in ipairs(
+			getTargets()
+		) do
+
+			state.InitialCFrames[part] =
+				part.CFrame
+
+			state.InitialSizes[part] =
+				part.Size
 		end
-	elseif config.CurrentMode == "Rotate" then
-		local rad = math.rad(math.floor(math.deg(distance) / 15 + 0.5) * 15)
-		local axisVector = Vector3.FromAxis(face)
-		for _, p in ipairs(targets) do
-			if state.InitialCFrames[p] then
-				if p == primary then
-					p.CFrame = state.InitialCFrames[primary] * CFrame.fromAxisAngle(axisVector, rad)
-				else
-					local localOffset = state.InitialCFrames[primary]:ToObjectSpace(state.InitialCFrames[p])
-					local rotatedOffset = CFrame.fromAxisAngle(axisVector, rad) * localOffset
-					p.CFrame = (state.InitialCFrames[primary] * CFrame.fromAxisAngle(axisVector, rad)) * rotatedOffset
+	end
+
+-- ==========================================================
+-- STOP TRANSFORM
+-- ==========================================================
+
+getgenv().StopTrackingTransforms =
+	function()
+
+		state.IsManipulating =
+			false
+
+		state.CurrentHandleFace =
+			nil
+
+		state.InitialCFrames =
+			{}
+
+		state.InitialSizes =
+			{}
+	end
+
+-- ==========================================================
+-- SNAP
+-- ==========================================================
+
+local function snapDistance(distance)
+
+	local increment =
+		config.Increment
+
+	if not increment
+		or increment <= 0
+	then
+		return distance
+	end
+
+	return math.round(
+		distance / increment
+	) * increment
+end
+
+-- ==========================================================
+-- SCALE HELPER
+--
+-- THIS IS THE IMPORTANT FIX.
+--
+-- normal = which bubble/face you grabbed.
+--
+-- Example:
+--
+-- Right bubble (+X):
+--   Pull outward -> X grows
+--   Center moves right
+--   LEFT SIDE stays fixed
+--
+-- Left bubble (-X):
+--   Pull outward -> X grows
+--   Center moves left
+--   RIGHT SIDE stays fixed
+--
+-- Drag inward:
+--   That selected face moves inward
+--   Size shrinks
+--   Opposite face stays fixed
+-- ==========================================================
+
+local function scalePartFromFace(
+	part,
+	face,
+	distance
+)
+
+	local originalSize =
+		state.InitialSizes[part]
+
+	local originalCFrame =
+		state.InitialCFrames[part]
+
+	if not originalSize
+		or not originalCFrame
+	then
+		return
+	end
+
+	local snappedDistance =
+		snapDistance(
+			distance
+		)
+
+	-- Direction of the selected handle.
+	local faceNormal =
+		Vector3.FromNormalId(
+			face
+		)
+
+	-- ======================================================
+	-- CRITICAL DIFFERENCE FROM OLD CODE:
+	--
+	-- Size change ignores +/- FACE DIRECTION,
+	-- but DOES NOT ignore +/- DRAG DISTANCE.
+	--
+	-- So:
+	--
+	-- +X outward = grow X
+	-- -X outward = grow X
+	-- +X inward  = shrink X
+	-- -X inward  = shrink X
+	--
+	-- The FACE decides which side the center shifts toward.
+	-- ======================================================
+
+	local axisMask =
+		Vector3.new(
+			math.abs(faceNormal.X),
+			math.abs(faceNormal.Y),
+			math.abs(faceNormal.Z)
+		)
+
+	local sizeDelta =
+		axisMask
+		* snappedDistance
+
+	local newSize =
+		originalSize
+		+ sizeDelta
+
+	-- ======================================================
+	-- MINIMUM PART SIZE PROTECTION
+	-- ======================================================
+
+	local MIN_SIZE = 0.05
+
+	if newSize.X < MIN_SIZE
+		or newSize.Y < MIN_SIZE
+		or newSize.Z < MIN_SIZE
+	then
+		return
+	end
+
+	-- ======================================================
+	-- KEEP OPPOSITE FACE ANCHORED
+	--
+	-- If one side grows 4 studs:
+	-- center moves 2 studs toward dragged face.
+	-- ======================================================
+
+	local centerShift =
+		faceNormal
+		* (
+			snappedDistance / 2
+		)
+
+	part.Size =
+		newSize
+
+	part.CFrame =
+		originalCFrame
+		* CFrame.new(
+			centerShift
+		)
+end
+
+-- ==========================================================
+-- PROCESS DRAG
+-- ==========================================================
+
+getgenv().ProcessHandleDragDelta =
+	function(
+		face,
+		distance
+	)
+
+		if not state.IsManipulating then
+			return
+		end
+
+		local primary =
+			getPrimaryPart()
+
+		if not primary then
+			return
+		end
+
+		local targets =
+			getTargets()
+
+		local snappedDistance =
+			snapDistance(
+				distance
+			)
+
+		-- ==================================================
+		-- MOVE
+		-- ==================================================
+
+		if config.CurrentMode
+			== "Move"
+		then
+
+			local initial =
+				state.InitialCFrames[
+					primary
+				]
+
+			if not initial then
+				return
+			end
+
+			local localNormal =
+				Vector3.FromNormalId(
+					face
+				)
+
+			local worldDelta =
+				initial:
+					VectorToWorldSpace(
+						localNormal
+						* snappedDistance
+					)
+
+			for _, part in ipairs(
+				targets
+			) do
+
+				local startCFrame =
+					state.InitialCFrames[
+						part
+					]
+
+				if startCFrame then
+
+					part.CFrame =
+						startCFrame
+						+ worldDelta
+				end
+			end
+
+		-- ==================================================
+		-- SCALE
+		-- ==================================================
+
+		elseif config.CurrentMode
+			== "Scale"
+		then
+
+			for _, part in ipairs(
+				targets
+			) do
+
+				scalePartFromFace(
+					part,
+					face,
+					distance
+				)
+			end
+
+		-- ==================================================
+		-- ROTATE
+		-- ==================================================
+
+		elseif config.CurrentMode
+			== "Rotate"
+		then
+
+			local snappedDegrees =
+				math.round(
+					math.deg(
+						distance
+					) / 15
+				) * 15
+
+			local radians =
+				math.rad(
+					snappedDegrees
+				)
+
+			local axisVector =
+				Vector3.FromAxis(
+					face
+				)
+
+			local primaryStart =
+				state.InitialCFrames[
+					primary
+				]
+
+			if not primaryStart then
+				return
+			end
+
+			local rotation =
+				CFrame.fromAxisAngle(
+					axisVector,
+					radians
+				)
+
+			for _, part in ipairs(
+				targets
+			) do
+
+				local startCFrame =
+					state.InitialCFrames[
+						part
+					]
+
+				if startCFrame then
+
+					if part == primary then
+
+						part.CFrame =
+							primaryStart
+							* rotation
+
+					else
+
+						local offset =
+							primaryStart:
+								ToObjectSpace(
+									startCFrame
+								)
+
+						part.CFrame =
+							primaryStart
+							* rotation
+							* offset
+					end
 				end
 			end
 		end
 	end
-end
 
-local function createInterfaceButton(text, posZ, color, callback)
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.new(1, -20, 0, 30)
-	btn.Position = UDim2.new(0, 10, 0, posZ)
-	btn.BackgroundColor3 = color
-	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	btn.Font = Enum.Font.SourceSansBold
-	btn.TextSize = 12
-	btn.Text = text
-	btn.Parent = ui.Frame
-	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-	
-	btn.MouseButton1Click:Connect(function()
-		if not config.Active or (#config.SelectedGroup == 0 and not config.SelectedInstance) then 
-			ui.TargetText.Text = "Selected: NOTHING HIGHLIGHTED!"
-			return 
-		end
-		callback()
-	end)
-end
+-- ==========================================================
+-- INTERFACE BUTTON HELPER
+-- ==========================================================
 
-createInterfaceButton("DUPLICATE CHOSEN TARGETS", 155, Color3.fromRGB(0, 160, 100), function()
-	local newGroup = {}
-	local primary = config.SelectedInstance
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {primary}
-	for _, part in ipairs(targets) do
-		pcall(function()
-			if part and part:IsA("BasePart") then
-				local clone = part:Clone()
-				clone.CFrame = part.CFrame + Vector3.new(0, part.Size.Y + 2, 0)
-				clone.Parent = part.Parent
-				table.insert(newGroup, clone)
+local function createInterfaceButton(
+	text,
+	posY,
+	color,
+	callback
+)
+
+	local button =
+		Instance.new(
+			"TextButton"
+		)
+
+	button.Size =
+		UDim2.new(
+			1,
+			-20,
+			0,
+			30
+		)
+
+	button.Position =
+		UDim2.new(
+			0,
+			10,
+			0,
+			posY
+		)
+
+	button.BackgroundColor3 =
+		color
+
+	button.TextColor3 =
+		Color3.fromRGB(
+			255,
+			255,
+			255
+		)
+
+	button.Font =
+		Enum.Font.SourceSansBold
+
+	button.TextSize =
+		12
+
+	button.Text =
+		text
+
+	button.Parent =
+		ui.Frame
+
+	local corner =
+		Instance.new(
+			"UICorner",
+			button
+		)
+
+	corner.CornerRadius =
+		UDim.new(
+			0,
+			4
+		)
+
+	button.MouseButton1Click:
+		Connect(function()
+
+			if not config.Active then
+				return
 			end
+
+			if #getTargets() == 0 then
+
+				ui.TargetText.Text =
+					"Selected: NOTHING HIGHLIGHTED!"
+
+				return
+			end
+
+			callback()
 		end)
+
+	return button
+end
+
+-- ==========================================================
+-- DUPLICATE
+-- ==========================================================
+
+createInterfaceButton(
+	"DUPLICATE CHOSEN TARGETS",
+	155,
+	Color3.fromRGB(
+		0,
+		160,
+		100
+	),
+	function()
+
+		local newGroup = {}
+
+		for _, part in ipairs(
+			getTargets()
+		) do
+
+			pcall(function()
+
+				local clone =
+					part:Clone()
+
+				clone.CFrame =
+					part.CFrame
+					+ Vector3.new(
+						0,
+						part.Size.Y + 2,
+						0
+					)
+
+				clone.Parent =
+					part.Parent
+
+				table.insert(
+					newGroup,
+					clone
+				)
+
+			end)
+		end
+
+		if #newGroup > 0 then
+
+			config.SelectedGroup =
+				newGroup
+
+			config.SelectedInstance =
+				newGroup[1]
+
+			getgenv().
+				UpdateBToolsHandleVisibility()
+
+			ui.TargetText.Text =
+				"Selected: Group Cloned ("
+				.. tostring(
+					#newGroup
+				)
+				.. " parts)"
+		end
 	end
-	if #newGroup > 0 then
-		config.SelectedGroup = newGroup
-		config.SelectedInstance = newGroup
-		getgenv().UpdateBToolsHandleVisibility()
-		ui.TargetText.Text = "Selected: Group Cloned (" .. tostring(#newGroup) .. " parts)"
+)
+
+-- ==========================================================
+-- DELETE
+-- ==========================================================
+
+createInterfaceButton(
+	"DELETE CHOSEN TARGETS",
+	190,
+	Color3.fromRGB(
+		180,
+		45,
+		45
+	),
+	function()
+
+		for _, part in ipairs(
+			getTargets()
+		) do
+
+			pcall(function()
+				part:Destroy()
+			end)
+		end
+
+		config.SelectedInstance =
+			nil
+
+		config.SelectedGroup =
+			{}
+
+		getgenv().
+			UpdateBToolsHandleVisibility()
+
+		ui.TargetText.Text =
+			"Selected: Group Erased"
+
+		config.CurrentMode =
+			"Select"
+
+		ui.ModeText.Text =
+			"Mode: SELECT POINTER"
 	end
-end)
+)
 
-createInterfaceButton("DELETE CHOSEN TARGETS", 190, Color3.fromRGB(180, 45, 45), function()
-	local targets = #config.SelectedGroup > 0 and config.SelectedGroup or {config.SelectedInstance}
-	for _, part in ipairs(targets) do pcall(function() part:Destroy() end) end
-	config.SelectedInstance = nil
-	config.SelectedGroup = {}
-	getgenv().UpdateBToolsHandleVisibility()
-	ui.TargetText.Text = "Selected: Group Erased ✔"
-	config.CurrentMode = "Select"
-	ui.ModeText.Text = "Mode: SELECT POINTER"
-end)
+print("Part 2 loaded.")
 
-print("Part 2 Loaded successfully.")
--- PART 3: Raycast Scanner Loops & Input Mapping Enforcers
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local Players = game:GetService("Players")
+-- ==========================================================
+-- PART 3: INPUT + RAYCAST
+-- ==========================================================
 
-local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
-local mouse = player:GetMouse()
+local RunService =
+	game:GetService(
+		"RunService"
+	)
 
-local ui = getgenv().AsylumBToolsUI
-local config = getgenv().CustomBToolsConfig
-local state = getgenv().BToolsInternalState
+local UserInputService =
+	game:GetService(
+		"UserInputService"
+	)
 
-if not ui or not config or not state then
-	warn("ERROR: Absolute execution crash. Missing state tables from Part 2.")
+local camera =
+	workspace.CurrentCamera
+
+local mouse =
+	player:GetMouse()
+
+ui =
+	getgenv().AsylumBToolsUI
+
+config =
+	getgenv().CustomBToolsConfig
+
+state =
+	getgenv().BToolsInternalState
+
+if not ui
+	or not config
+	or not state
+then
+
+	warn(
+		"ERROR: Missing BTools state."
+	)
+
 	return
 end
 
-local isDragging = false
-local dragStart = Vector2.new()
+-- ==========================================================
+-- CREATE TOOL FIRST
+-- ==========================================================
 
--- Bind handle listeners to calculation matrix functions
-table.insert(state.BtoolsConnections, ui.MoveHandles.MouseButton1Down:Connect(function(face) getgenv().StartTrackingTransforms() end))
-table.insert(state.BtoolsConnections, ui.MoveHandles.MouseDrag:Connect(function(face, distance) getgenv().ProcessHandleDragDelta(face, distance) end))
-table.insert(state.BtoolsConnections, ui.MoveHandles.MouseButton1Up:Connect(function() getgenv().StopTrackingTransforms() end))
+local tool =
+	Instance.new("Tool")
 
-table.insert(state.BtoolsConnections, ui.ScaleHandles.MouseButton1Down:Connect(function(face) getgenv().StartTrackingTransforms() end))
-table.insert(state.BtoolsConnections, ui.ScaleHandles.MouseDrag:Connect(function(face, distance) getgenv().ProcessHandleDragDelta(face, distance) end))
-table.insert(state.BtoolsConnections, ui.ScaleHandles.MouseButton1Up:Connect(function() getgenv().StopTrackingTransforms() end))
+tool.Name =
+	"Custom BTools"
 
-table.insert(state.BtoolsConnections, ui.RotateHandles.MouseButton1Down:Connect(function(axis) getgenv().StartTrackingTransforms() end))
-table.insert(state.BtoolsConnections, ui.RotateHandles.MouseDrag:Connect(function(axis, relativeAngle) getgenv().ProcessHandleDragDelta(axis, relativeAngle) end))
-table.insert(state.BtoolsConnections, ui.RotateHandles.MouseButton1Up:Connect(function() getgenv().StopTrackingTransforms() end))
+tool.RequiresHandle =
+	false
 
--- Hotkey Listeners
-table.insert(state.BtoolsConnections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed or (tool and tool.Parent ~= player.Character) then return end
-	if input.KeyCode == Enum.KeyCode.Z then
-		config.CurrentMode = "Select"
-		ui.ModeText.Text = "Mode: SELECT POINTER"
-	elseif input.KeyCode == Enum.KeyCode.X then
-		config.CurrentMode = "Move"
-		ui.ModeText.Text = "Mode: MOVE ARROWS"
-	elseif input.KeyCode == Enum.KeyCode.C then
-		config.CurrentMode = "Scale"
-		ui.ModeText.Text = "Mode: SCALE DOTS"
-	elseif input.KeyCode == Enum.KeyCode.V then
-		config.CurrentMode = "Rotate"
-		ui.ModeText.Text = "Mode: ROTATE WHEELS"
-	end
-	getgenv().UpdateBToolsHandleVisibility()
-end))
+tool.Parent =
+	player.Backpack
 
-local tool = Instance.new("Tool")
-tool.Name = "Custom BTools"
-tool.RequiresHandle = false
-tool.Parent = player.Backpack
+-- ==========================================================
+-- BOX SELECT STATE
+-- ==========================================================
 
--- Render Loop Processing
-table.insert(state.BtoolsConnections, RunService.RenderStepped:Connect(function()
-	if not config.Active or not tool or tool.Parent ~= player.Character then 
-		if not config.SelectedInstance then ui.SelectionHighlight.Adornee = nil end
-		return 
-	end
-	
-	if isDragging then
-		local currentMousePos = Vector2.new(mouse.X, mouse.Y)
-		local minX = math.min(dragStart.X, currentMousePos.X)
-		local maxX = math.max(dragStart.X, currentMousePos.X)
-		local minY = math.min(dragStart.Y, currentMousePos.Y)
-		local maxY = math.max(dragStart.Y, currentMousePos.Y)
-		ui.DragBox.Position = UDim2.new(0, minX, 0, minY)
-		ui.DragBox.Size = UDim2.new(0, maxX - minX, 0, maxY - minY)
-		return
-	end
-	
-	if state.IsManipulating then return end
-	
-	local mouseRay = camera:ScreenPointToRay(mouse.X, mouse.Y)
-	local params = RaycastParams.new()
-	params.FilterDescendantsInstances = {player.Character}
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	
-	local result = workspace:Raycast(mouseRay.Origin, mouseRay.Direction * 500, params)
-	if result and result.Instance and result.Instance:IsA("BasePart") and not result.Instance.Locked then
-		config.HoverInstance = result.Instance
-		if not config.SelectedInstance then
-			ui.SelectionHighlight.Adornee = result.Instance
-			ui.SelectionHighlight.Color3 = Color3.fromRGB(0, 255, 255)
-		end
-	else
-		config.HoverInstance = nil
-		if not config.SelectedInstance then ui.SelectionHighlight.Adornee = nil end
-	end
-end))
+local isDragging =
+	false
 
-table.insert(state.BtoolsConnections, tool.Equipped:Connect(function() ui.Frame.Visible = true getgenv().UpdateBToolsHandleVisibility() end))
-table.insert(state.BtoolsConnections, tool.Unequipped:Connect(function()
-	ui.Frame.Visible = false config.SelectedInstance = nil config.SelectedGroup = {} getgenv().UpdateBToolsHandleVisibility()
-end))
+local dragStart =
+	Vector2.new()
 
-table.insert(state.BtoolsConnections, mouse.Button1Down:Connect(function()
-	if tool.Parent ~= player.Character or state.IsManipulating then return end
-	
-	if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-		isDragging = true
-		dragStart = Vector2.new(mouse.X, mouse.Y)
-		ui.DragBox.Position = UDim2.new(0, dragStart.X, 0, dragStart.Y)
-		ui.DragBox.Size = UDim2.new(0, 0, 0, 0)
-		ui.DragBox.Visible = true
-		config.SelectedInstance = nil
-		config.SelectedGroup = {}
-		getgenv().UpdateBToolsHandleVisibility()
-	else
-		if not config.HoverInstance or config.SelectedInstance then return end
-		config.SelectedInstance = config.HoverInstance
-		config.SelectedGroup = {config.HoverInstance}
-		ui.TargetText.Text = "Selected: " .. config.SelectedInstance.Name
-		getgenv().UpdateBToolsHandleVisibility()
-	end
-end))
+-- ==========================================================
+-- MOVE HANDLE EVENTS
+-- ==========================================================
 
-table.insert(state.BtoolsConnections, mouse.Button1Up:Connect(function()
-	if not isDragging then return end
-	isDragging = false
-	ui.DragBox.Visible = false
-	
-	local dragEnd = Vector2.new(mouse.X, mouse.Y)
-	local minX = math.min(dragStart.X, dragEnd.X)
-	local maxX = math.max(dragStart.X, dragEnd.X)
-	local minY = math.min(dragStart.Y, dragEnd.Y)
-	local maxY = math.max(dragStart.Y, dragEnd.Y)
-	
-	local selectedBuffer = {}
-	for _, part in ipairs(workspace:GetDescendants()) do
-		if part:IsA("BasePart") and not part.Locked and part.Parent ~= player.Character then
-			local screenPos, onScreen = camera:WorldToScreenPoint(part.Position)
-			if onScreen then
-				if screenPos.X >= minX and screenPos.X <= maxX and screenPos.Y >= minY and screenPos.Y <= maxY then
-					table.insert(selectedBuffer, part)
+table.insert(
+	state.BtoolsConnections,
+
+	ui.MoveHandles.MouseButton1Down:
+		Connect(function(face)
+
+			getgenv().
+				StartTrackingTransforms(
+					face
+				)
+		end)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.MoveHandles.MouseDrag:
+		Connect(
+			function(
+				face,
+				distance
+			)
+
+				getgenv().
+					ProcessHandleDragDelta(
+						face,
+						distance
+					)
+			end
+		)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.MoveHandles.MouseButton1Up:
+		Connect(function()
+
+			getgenv().
+				StopTrackingTransforms()
+		end)
+)
+
+-- ==========================================================
+-- SCALE HANDLE EVENTS
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.ScaleHandles.MouseButton1Down:
+		Connect(function(face)
+
+			getgenv().
+				StartTrackingTransforms(
+					face
+				)
+		end)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.ScaleHandles.MouseDrag:
+		Connect(
+			function(
+				face,
+				distance
+			)
+
+				getgenv().
+					ProcessHandleDragDelta(
+						face,
+						distance
+					)
+			end
+		)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.ScaleHandles.MouseButton1Up:
+		Connect(function()
+
+			getgenv().
+				StopTrackingTransforms()
+		end)
+)
+
+-- ==========================================================
+-- ROTATE HANDLE EVENTS
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.RotateHandles.MouseButton1Down:
+		Connect(function(axis)
+
+			getgenv().
+				StartTrackingTransforms(
+					axis
+				)
+		end)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.RotateHandles.MouseDrag:
+		Connect(
+			function(
+				axis,
+				relativeAngle
+			)
+
+				getgenv().
+					ProcessHandleDragDelta(
+						axis,
+						relativeAngle
+					)
+			end
+		)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	ui.RotateHandles.MouseButton1Up:
+		Connect(function()
+
+			getgenv().
+				StopTrackingTransforms()
+		end)
+)
+
+-- ==========================================================
+-- HOTKEYS
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	UserInputService.InputBegan:
+		Connect(function(
+			input,
+			gameProcessed
+		)
+
+			if gameProcessed then
+				return
+			end
+
+			if tool.Parent
+				~= player.Character
+			then
+				return
+			end
+
+			if input.KeyCode
+				== Enum.KeyCode.Z
+			then
+
+				config.CurrentMode =
+					"Select"
+
+				ui.ModeText.Text =
+					"Mode: SELECT POINTER"
+
+			elseif input.KeyCode
+				== Enum.KeyCode.X
+			then
+
+				config.CurrentMode =
+					"Move"
+
+				ui.ModeText.Text =
+					"Mode: MOVE ARROWS"
+
+			elseif input.KeyCode
+				== Enum.KeyCode.C
+			then
+
+				config.CurrentMode =
+					"Scale"
+
+				ui.ModeText.Text =
+					"Mode: SCALE DOTS"
+
+			elseif input.KeyCode
+				== Enum.KeyCode.V
+			then
+
+				config.CurrentMode =
+					"Rotate"
+
+				ui.ModeText.Text =
+					"Mode: ROTATE WHEELS"
+			end
+
+			getgenv().
+				UpdateBToolsHandleVisibility()
+		end)
+)
+
+-- ==========================================================
+-- RENDER / HOVER
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	RunService.RenderStepped:
+		Connect(function()
+
+			if not config.Active
+				or not tool
+				or tool.Parent
+					~= player.Character
+			then
+
+				if not config.SelectedInstance then
+					ui.SelectionHighlight.Adornee =
+						nil
+				end
+
+				return
+			end
+
+			if isDragging then
+
+				local currentMousePos =
+					Vector2.new(
+						mouse.X,
+						mouse.Y
+					)
+
+				local minX =
+					math.min(
+						dragStart.X,
+						currentMousePos.X
+					)
+
+				local maxX =
+					math.max(
+						dragStart.X,
+						currentMousePos.X
+					)
+
+				local minY =
+					math.min(
+						dragStart.Y,
+						currentMousePos.Y
+					)
+
+				local maxY =
+					math.max(
+						dragStart.Y,
+						currentMousePos.Y
+					)
+
+				ui.DragBox.Position =
+					UDim2.new(
+						0,
+						minX,
+						0,
+						minY
+					)
+
+				ui.DragBox.Size =
+					UDim2.new(
+						0,
+						maxX - minX,
+						0,
+						maxY - minY
+					)
+
+				return
+			end
+
+			if state.IsManipulating then
+				return
+			end
+
+			local mouseRay =
+				camera:
+					ScreenPointToRay(
+						mouse.X,
+						mouse.Y
+					)
+
+			local params =
+				RaycastParams.new()
+
+			params.FilterDescendantsInstances =
+				{
+					player.Character
+				}
+
+			params.FilterType =
+				Enum.RaycastFilterType.Exclude
+
+			local result =
+				workspace:Raycast(
+					mouseRay.Origin,
+					mouseRay.Direction
+						* 500,
+					params
+				)
+
+			if result
+				and result.Instance
+				and result.Instance:
+					IsA("BasePart")
+				and not result.Instance.Locked
+			then
+
+				config.HoverInstance =
+					result.Instance
+
+				if not config.SelectedInstance then
+
+					ui.SelectionHighlight.Adornee =
+						result.Instance
+
+					ui.SelectionHighlight.Color3 =
+						Color3.fromRGB(
+							0,
+							255,
+							255
+						)
+				end
+
+			else
+
+				config.HoverInstance =
+					nil
+
+				if not config.SelectedInstance then
+
+					ui.SelectionHighlight.Adornee =
+						nil
 				end
 			end
-		end
-	end
-	
-	if #selectedBuffer > 0 then
-		config.SelectedGroup = selectedBuffer
-		config.SelectedInstance = selectedBuffer
-		ui.TargetText.Text = "Selected Group Matrix: (" .. tostring(#selectedBuffer) .. " parts)"
-	else
-		ui.TargetText.Text = "Selected: None (Box Empty)"
-	end
-	getgenv().UpdateBToolsHandleVisibility()
-end))
+		end)
+)
 
--- SAFE RED DESTRUCTOR OVERRIDE: Instantly clears all frames, variables, highlights, and tools
-ui.UninstallButton.MouseButton1Click:Connect(function()
-	config.Active = false
-	getgenv().StopTrackingTransforms()
-	for _, conn in ipairs(state.BtoolsConnections) do if conn then conn:Disconnect() end end
-	state.BtoolsConnections = {}
-	getgenv().ClearBToolsGroupHighlights()
-	if ui.SelectionHighlight then ui.SelectionHighlight:Destroy() end
-	if ui.MoveHandles then ui.MoveHandles:Destroy() end
-	if ui.ScaleHandles then ui.ScaleHandles:Destroy() end
-	if ui.RotateHandles then ui.RotateHandles:Destroy() end
-	if ui.ScreenGui then ui.ScreenGui:Destroy() end
-	if tool then tool:Destroy() end
-	getgenv().AsylumBToolsUI = nil
-	getgenv().CustomBToolsConfig = nil
-	getgenv().BToolsInternalState = nil
-	print("SUCCESS: GUI completely destroyed, tools wiped, and event listeners disconnected.")
-end)
-print("Part 3 Loaded completely. Toolkit active.")
+-- ==========================================================
+-- EQUIP / UNEQUIP
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	tool.Equipped:
+		Connect(function()
+
+			ui.Frame.Visible =
+				true
+
+			getgenv().
+				UpdateBToolsHandleVisibility()
+		end)
+)
+
+table.insert(
+	state.BtoolsConnections,
+
+	tool.Unequipped:
+		Connect(function()
+
+			ui.Frame.Visible =
+				false
+
+			config.SelectedInstance =
+				nil
+
+			config.SelectedGroup =
+				{}
+
+			getgenv().
+				UpdateBToolsHandleVisibility()
+		end)
+)
+
+-- ==========================================================
+-- CLICK SELECTION
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	mouse.Button1Down:
+		Connect(function()
+
+			if tool.Parent
+				~= player.Character
+				or state.IsManipulating
+			then
+				return
+			end
+
+			if UserInputService:
+				IsKeyDown(
+					Enum.KeyCode.LeftShift
+				)
+			then
+
+				isDragging =
+					true
+
+				dragStart =
+					Vector2.new(
+						mouse.X,
+						mouse.Y
+					)
+
+				ui.DragBox.Position =
+					UDim2.new(
+						0,
+						dragStart.X,
+						0,
+						dragStart.Y
+					)
+
+				ui.DragBox.Size =
+					UDim2.new(
+						0,
+						0,
+						0,
+						0
+					)
+
+				ui.DragBox.Visible =
+					true
+
+				config.SelectedInstance =
+					nil
+
+				config.SelectedGroup =
+					{}
+
+				getgenv().
+					UpdateBToolsHandleVisibility()
+
+			else
+
+				if not config.HoverInstance
+					or config.SelectedInstance
+				then
+					return
+				end
+
+				config.SelectedInstance =
+					config.HoverInstance
+
+				config.SelectedGroup =
+					{
+						config.HoverInstance
+					}
+
+				ui.TargetText.Text =
+					"Selected: "
+					.. config.SelectedInstance.Name
+
+				getgenv().
+					UpdateBToolsHandleVisibility()
+			end
+		end)
+)
+
+-- ==========================================================
+-- BOX SELECT FINISH
+-- ==========================================================
+
+table.insert(
+	state.BtoolsConnections,
+
+	mouse.Button1Up:
+		Connect(function()
+
+			if not isDragging then
+				return
+			end
+
+			isDragging =
+				false
+
+			ui.DragBox.Visible =
+				false
+
+			local dragEnd =
+				Vector2.new(
+					mouse.X,
+					mouse.Y
+				)
+
+			local minX =
+				math.min(
+					dragStart.X,
+					dragEnd.X
+				)
+
+			local maxX =
+				math.max(
+					dragStart.X,
+					dragEnd.X
+				)
+
+			local minY =
+				math.min(
+					dragStart.Y,
+					dragEnd.Y
+				)
+
+			local maxY =
+				math.max(
+					dragStart.Y,
+					dragEnd.Y
+				)
+
+			local selectedBuffer =
+				{}
+
+			for _, part in ipairs(
+				workspace:
+					GetDescendants()
+			) do
+
+				if part:IsA("BasePart")
+					and not part.Locked
+					and not (
+						player.Character
+						and part:
+							IsDescendantOf(
+								player.Character
+							)
+					)
+				then
+
+					local screenPos,
+						onScreen =
+						camera:
+							WorldToScreenPoint(
+								part.Position
+							)
+
+					if onScreen
+						and screenPos.X >= minX
+						and screenPos.X <= maxX
+						and screenPos.Y >= minY
+						and screenPos.Y <= maxY
+					then
+
+						table.insert(
+							selectedBuffer,
+							part
+						)
+					end
+				end
+			end
+
+			if #selectedBuffer > 0 then
+
+				config.SelectedGroup =
+					selectedBuffer
+
+				config.SelectedInstance =
+					selectedBuffer[1]
+
+				ui.TargetText.Text =
+					"Selected Group Matrix: ("
+					.. tostring(
+						#selectedBuffer
+					)
+					.. " parts)"
+
+			else
+
+				config.SelectedInstance =
+					nil
+
+				config.SelectedGroup =
+					{}
+
+				ui.TargetText.Text =
+					"Selected: None (Box Empty)"
+			end
+
+			getgenv().
+				UpdateBToolsHandleVisibility()
+		end)
+)
+
+-- ==========================================================
+-- UNINSTALL
+-- ==========================================================
+
+ui.UninstallButton.MouseButton1Click:
+	Connect(function()
+
+		config.Active =
+			false
+
+		getgenv().
+			StopTrackingTransforms()
+
+		for _, connection in ipairs(
+			state.BtoolsConnections
+		) do
+
+			if connection then
+
+				pcall(function()
+					connection:
+						Disconnect()
+				end)
+			end
+		end
+
+		state.BtoolsConnections =
+			{}
+
+		getgenv().
+			ClearBToolsGroupHighlights()
+
+		if ui.SelectionHighlight then
+			ui.SelectionHighlight:
+				Destroy()
+		end
+
+		if ui.MoveHandles then
+			ui.MoveHandles:
+				Destroy()
+		end
+
+		if ui.ScaleHandles then
+			ui.ScaleHandles:
+				Destroy()
+		end
+
+		if ui.RotateHandles then
+			ui.RotateHandles:
+				Destroy()
+		end
+
+		if ui.ScreenGui then
+			ui.ScreenGui:
+				Destroy()
+		end
+
+		if tool then
+			tool:Destroy()
+		end
+
+		getgenv().AsylumBToolsUI =
+			nil
+
+		getgenv().CustomBToolsConfig =
+			nil
+
+		getgenv().BToolsInternalState =
+			nil
+
+		print(
+			"SUCCESS: BTools fully removed."
+		)
+	end)
+
+print("Part 3 loaded.")
+print("BTools active.")
+print("Scale handles now resize FROM the selected face.")
