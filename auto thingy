@@ -1,0 +1,3427 @@
+-- ==========================================================
+-- NODE AUTO-DOER
+-- FIXED DIRECT WALKING + OPTIONAL PATHFINDING
+-- ==========================================================
+--
+-- MOVEMENT:
+--
+-- DIRECT
+--   Uses Humanoid:MoveTo()
+--   NO PathfindingService
+--
+-- PATHFINDING
+--   Uses Roblox PathfindingService
+--
+-- NODE TYPES:
+--
+-- WALK
+-- WAIT
+-- PROXIMITY
+-- PROMPT
+-- JUMP
+-- KEY
+--
+-- ==========================================================
+
+local Players =
+	game:GetService("Players")
+
+local PathfindingService =
+	game:GetService("PathfindingService")
+
+local UserInputService =
+	game:GetService("UserInputService")
+
+local RunService =
+	game:GetService("RunService")
+
+local VirtualInputManager =
+	game:GetService("VirtualInputManager")
+
+local Workspace =
+	game:GetService("Workspace")
+
+local player =
+	Players.LocalPlayer
+
+local playerGui =
+	player:WaitForChild("PlayerGui")
+
+local mouse =
+	player:GetMouse()
+
+-- ==========================================================
+-- CLEAN OLD VERSION
+-- ==========================================================
+
+if getgenv().NodeAutoDoerCleanup then
+	pcall(
+		getgenv().NodeAutoDoerCleanup
+	)
+end
+
+-- ==========================================================
+-- NODE STORAGE
+-- ==========================================================
+
+if not getgenv().AutoNodes then
+	getgenv().AutoNodes = {}
+end
+
+local nodes =
+	getgenv().AutoNodes
+
+-- ==========================================================
+-- SETTINGS
+-- ==========================================================
+
+local SETTINGS = {
+
+	MovementMode =
+		"Direct",
+
+	-- Direct
+
+	DirectArrivalDistance =
+		1.75,
+
+	DirectStuckCheckInterval =
+		0.8,
+
+	DirectMinimumMovement =
+		0.65,
+
+	DirectAutoJump =
+		true,
+
+	-- How often MoveTo target is refreshed.
+	DirectRefreshRate =
+		0.15,
+
+	-- 0 = infinite
+	DirectTimeout =
+		0,
+
+	-- Pathfinding
+
+	AgentRadius =
+		2,
+
+	AgentHeight =
+		5,
+
+	AgentCanJump =
+		true,
+
+	WaypointSpacing =
+		2.5,
+
+	IntermediateWaypointDistance =
+		4.5,
+
+	FinalWaypointDistance =
+		1.5,
+
+	PathStuckCheckInterval =
+		0.8,
+
+	PathMinimumMovement =
+		1.1,
+
+	WaypointTimeout =
+		4,
+
+	MaxPathRetries =
+		5,
+
+	-- Nodes
+
+	DefaultProximityDistance =
+		6
+}
+
+-- ==========================================================
+-- STATE
+-- ==========================================================
+
+local alive =
+	true
+
+local executing =
+	false
+
+local stopRequested =
+	false
+
+local loopRoute =
+	false
+
+local currentNodeIndex =
+	nil
+
+local selectedNodeIndex =
+	nil
+
+local placementMode =
+	nil
+
+local keyCaptureNode =
+	nil
+
+local routeId =
+	0
+
+local connections =
+	{}
+
+local markers =
+	{}
+
+local markerFolder =
+	nil
+
+-- ==========================================================
+-- CONNECTION TRACKER
+-- ==========================================================
+
+local function track(connection)
+
+	table.insert(
+		connections,
+		connection
+	)
+
+	return connection
+end
+
+-- ==========================================================
+-- GET CHARACTER
+-- ==========================================================
+
+local function getCharacter()
+
+	local character =
+		player.Character
+
+	if not character then
+		return nil
+	end
+
+	local humanoid =
+		character:
+			FindFirstChildOfClass(
+				"Humanoid"
+			)
+
+	local root =
+		character:
+			FindFirstChild(
+				"HumanoidRootPart"
+			)
+
+	if not humanoid
+		or not root
+	then
+
+		return nil
+	end
+
+	if humanoid.Health <= 0 then
+		return nil
+	end
+
+	return character,
+		humanoid,
+		root
+end
+
+-- ==========================================================
+-- STOP CHARACTER
+-- ==========================================================
+
+local function stopMovement()
+
+	local _,
+		humanoid,
+		root =
+		getCharacter()
+
+	if humanoid
+		and root
+	then
+
+		-- Cancel MoveTo.
+		humanoid:
+			MoveTo(
+				root.Position
+			)
+
+		humanoid:
+			Move(
+				Vector3.zero,
+				false
+			)
+	end
+end
+
+-- ==========================================================
+-- INSTANCE POSITION
+-- ==========================================================
+
+local function getInstancePosition(
+	instance
+)
+
+	if not instance
+		or not instance.Parent
+	then
+
+		return nil
+	end
+
+	if instance:IsA("Attachment") then
+
+		return instance.WorldPosition
+	end
+
+	if instance:IsA("BasePart") then
+
+		return instance.Position
+	end
+
+	if instance:IsA("Model") then
+
+		return instance:
+			GetPivot().Position
+	end
+
+	if instance:IsA("ProximityPrompt") then
+
+		local parent =
+			instance.Parent
+
+		if parent:IsA("Attachment") then
+
+			return parent.WorldPosition
+
+		elseif parent:IsA("BasePart") then
+
+			return parent.Position
+		end
+	end
+
+	local model =
+		instance:
+			FindFirstAncestorOfClass(
+				"Model"
+			)
+
+	if model then
+
+		return model:
+			GetPivot().Position
+	end
+
+	return nil
+end
+
+-- ==========================================================
+-- NODE POSITION
+-- ==========================================================
+
+local function getNodePosition(
+	node
+)
+
+	if not node then
+		return nil
+	end
+
+	if node.Type == "Walk" then
+
+		return node.Position
+
+	elseif node.Type == "Proximity" then
+
+		return getInstancePosition(
+			node.Target
+		)
+
+	elseif node.Type == "Prompt" then
+
+		return getInstancePosition(
+			node.Prompt
+		)
+	end
+
+	return nil
+end
+
+-- ==========================================================
+-- NODE TEXT
+-- ==========================================================
+
+local function nodeText(
+	node,
+	index
+)
+
+	if not node then
+
+		return tostring(index)
+			.. ". ???"
+	end
+
+	if node.Type == "Walk" then
+
+		return tostring(index)
+			.. ". WALK"
+
+	elseif node.Type == "Wait" then
+
+		return tostring(index)
+			.. ". WAIT "
+			.. string.format(
+				"%.1fs",
+				node.Duration
+					or 2
+			)
+
+	elseif node.Type == "Proximity" then
+
+		return tostring(index)
+			.. ". PROX "
+			.. (
+				node.Target
+				and node.Target.Name
+				or "missing"
+			)
+			.. " ["
+			.. tostring(
+				node.Distance
+					or SETTINGS.DefaultProximityDistance
+			)
+			.. "]"
+
+	elseif node.Type == "Prompt" then
+
+		return tostring(index)
+			.. ". PROMPT "
+			.. (
+				node.Prompt
+				and node.Prompt.Name
+				or "missing"
+			)
+
+	elseif node.Type == "Jump" then
+
+		return tostring(index)
+			.. ". JUMP"
+
+	elseif node.Type == "Key" then
+
+		return tostring(index)
+			.. ". KEY ["
+			.. (
+				node.KeyCode
+				and node.KeyCode.Name
+				or "None"
+			)
+			.. "]"
+	end
+
+	return tostring(index)
+		.. ". "
+		.. tostring(
+			node.Type
+		)
+end
+
+-- ==========================================================
+-- MARKERS
+-- ==========================================================
+
+local function resetMarkers()
+
+	if markerFolder
+		and markerFolder.Parent
+	then
+
+		markerFolder:
+			Destroy()
+	end
+
+	markerFolder =
+		Instance.new("Folder")
+
+	markerFolder.Name =
+		"AutoDoerNodeMarkers"
+
+	markerFolder.Parent =
+		Workspace
+
+	markers = {}
+end
+
+local function createMarker(
+	index,
+	node
+)
+
+	local position =
+		getNodePosition(
+			node
+		)
+
+	if not position then
+		return nil
+	end
+
+	local part =
+		Instance.new("Part")
+
+	part.Name =
+		"RouteNode_"
+		.. tostring(index)
+
+	part.Shape =
+		Enum.PartType.Ball
+
+	part.Size =
+		Vector3.new(
+			1,
+			1,
+			1
+		)
+
+	part.Material =
+		Enum.Material.Neon
+
+	part.Anchored =
+		true
+
+	part.CanCollide =
+		false
+
+	part.CanTouch =
+		false
+
+	part.CanQuery =
+		false
+
+	part.Transparency =
+		0.2
+
+	part.Position =
+		position
+		+ Vector3.new(
+			0,
+			1.5,
+			0
+		)
+
+	part.Parent =
+		markerFolder
+
+	local billboard =
+		Instance.new(
+			"BillboardGui"
+		)
+
+	billboard.Size =
+		UDim2.fromOffset(
+			130,
+			45
+		)
+
+	billboard.StudsOffset =
+		Vector3.new(
+			0,
+			1,
+			0
+		)
+
+	billboard.AlwaysOnTop =
+		true
+
+	billboard.Parent =
+		part
+
+	local label =
+		Instance.new("TextLabel")
+
+	label.Size =
+		UDim2.fromScale(
+			1,
+			1
+		)
+
+	label.BackgroundColor3 =
+		Color3.fromRGB(
+			15,
+			15,
+			18
+		)
+
+	label.BackgroundTransparency =
+		0.25
+
+	label.BorderSizePixel =
+		0
+
+	label.Text =
+		nodeText(
+			node,
+			index
+		)
+
+	label.TextColor3 =
+		Color3.new(
+			1,
+			1,
+			1
+		)
+
+	label.TextWrapped =
+		true
+
+	label.TextSize =
+		12
+
+	label.Font =
+		Enum.Font.SourceSansBold
+
+	label.Parent =
+		billboard
+
+	return {
+
+		Part =
+			part,
+
+		Label =
+			label
+	}
+end
+
+local function rebuildMarkers()
+
+	resetMarkers()
+
+	for index, node in ipairs(
+		nodes
+	) do
+
+		markers[index] =
+			createMarker(
+				index,
+				node
+			)
+	end
+end
+
+local function updateMarkers()
+
+	for index, node in ipairs(
+		nodes
+	) do
+
+		local marker =
+			markers[index]
+
+		if marker
+			and marker.Part
+			and marker.Part.Parent
+		then
+
+			local position =
+				getNodePosition(
+					node
+				)
+
+			if position then
+
+				marker.Part.Position =
+					position
+					+ Vector3.new(
+						0,
+						1.5,
+						0
+					)
+			end
+
+			marker.Label.Text =
+				nodeText(
+					node,
+					index
+				)
+
+			if currentNodeIndex
+				== index
+			then
+
+				marker.Part.Size =
+					Vector3.new(
+						1.5,
+						1.5,
+						1.5
+					)
+
+			elseif selectedNodeIndex
+				== index
+			then
+
+				marker.Part.Size =
+					Vector3.new(
+						1.2,
+						1.2,
+						1.2
+					)
+
+			else
+
+				marker.Part.Size =
+					Vector3.new(
+						1,
+						1,
+						1
+					)
+			end
+		end
+	end
+end
+
+-- ==========================================================
+-- FIXED DIRECT WALK
+-- ==========================================================
+--
+-- Humanoid:Move() can be overwritten by PlayerModule.
+--
+-- MoveTo() gives Humanoid an actual destination and is much
+-- more reliable for autonomous walking.
+--
+-- ==========================================================
+
+local function directWalk(
+	targetPosition,
+	arrivalDistance,
+	runId
+)
+
+	arrivalDistance =
+		arrivalDistance
+		or SETTINGS.DirectArrivalDistance
+
+	local started =
+		os.clock()
+
+	local lastRefresh =
+		0
+
+	local lastStuckCheck =
+		os.clock()
+
+	local _,
+		_,
+		firstRoot =
+		getCharacter()
+
+	local lastPosition =
+		firstRoot
+		and firstRoot.Position
+		or nil
+
+	while alive do
+
+		if stopRequested
+			or runId ~= routeId
+		then
+
+			stopMovement()
+
+			return false,
+				"Stopped"
+		end
+
+		local character,
+			humanoid,
+			root =
+			getCharacter()
+
+		if not character then
+
+			return false,
+				"No character"
+		end
+
+		local difference =
+			targetPosition
+			- root.Position
+
+		local horizontalDistance =
+			Vector3.new(
+				difference.X,
+				0,
+				difference.Z
+			).Magnitude
+
+		-- ==================================================
+		-- ARRIVAL
+		-- ==================================================
+
+		if horizontalDistance
+			<= arrivalDistance
+		then
+
+			stopMovement()
+
+			return true
+		end
+
+		-- ==================================================
+		-- OPTIONAL TIMEOUT
+		-- ==================================================
+
+		if SETTINGS.DirectTimeout > 0
+			and os.clock()
+				- started
+				>= SETTINGS.DirectTimeout
+		then
+
+			stopMovement()
+
+			return false,
+				"Direct timeout"
+		end
+
+		-- ==================================================
+		-- REFRESH MOVETO
+		-- ==================================================
+
+		if os.clock()
+			- lastRefresh
+			>= SETTINGS.DirectRefreshRate
+		then
+
+			humanoid:
+				MoveTo(
+					targetPosition
+				)
+
+			lastRefresh =
+				os.clock()
+		end
+
+		-- ==================================================
+		-- STUCK CHECK
+		-- ==================================================
+
+		if os.clock()
+			- lastStuckCheck
+			>= SETTINGS.DirectStuckCheckInterval
+		then
+
+			if lastPosition then
+
+				local moved =
+					(
+						root.Position
+						- lastPosition
+					).Magnitude
+
+				if moved
+					<= SETTINGS.DirectMinimumMovement
+				then
+
+					if SETTINGS.DirectAutoJump then
+
+						humanoid.Jump =
+							true
+					end
+
+					-- Force MoveTo again after jump.
+
+					humanoid:
+						MoveTo(
+							targetPosition
+						)
+				end
+			end
+
+			lastPosition =
+				root.Position
+
+			lastStuckCheck =
+				os.clock()
+		end
+
+		RunService.Heartbeat:
+			Wait()
+	end
+
+	return false
+end
+
+-- ==========================================================
+-- PATHFIND WALK
+-- ==========================================================
+
+local function pathfindWalk(
+	targetPosition,
+	arrivalDistance,
+	runId
+)
+
+	arrivalDistance =
+		arrivalDistance
+		or SETTINGS.FinalWaypointDistance
+
+	for retry = 1,
+		SETTINGS.MaxPathRetries
+	do
+
+		if stopRequested
+			or runId ~= routeId
+		then
+
+			return false,
+				"Stopped"
+		end
+
+		local character,
+			humanoid,
+			root =
+			getCharacter()
+
+		if not character then
+
+			return false,
+				"No character"
+		end
+
+		local path =
+			PathfindingService:
+				CreatePath({
+
+					AgentRadius =
+						SETTINGS.AgentRadius,
+
+					AgentHeight =
+						SETTINGS.AgentHeight,
+
+					AgentCanJump =
+						SETTINGS.AgentCanJump,
+
+					WaypointSpacing =
+						SETTINGS.WaypointSpacing
+				})
+
+		local calculated =
+			pcall(function()
+
+				path:
+					ComputeAsync(
+						root.Position,
+						targetPosition
+					)
+			end)
+
+		if calculated
+			and path.Status
+				== Enum.PathStatus.Success
+		then
+
+			local waypoints =
+				path:
+					GetWaypoints()
+
+			local failed =
+				false
+
+			for waypointIndex,
+				waypoint in ipairs(
+					waypoints
+				)
+			do
+
+				if stopRequested
+					or runId ~= routeId
+				then
+
+					stopMovement()
+
+					return false,
+						"Stopped"
+				end
+
+				if waypoint.Action
+					== Enum.PathWaypointAction.Jump
+				then
+
+					humanoid.Jump =
+						true
+				end
+
+				local finalWaypoint =
+					waypointIndex
+					== #waypoints
+
+				local distanceNeeded =
+					finalWaypoint
+					and arrivalDistance
+					or SETTINGS.IntermediateWaypointDistance
+
+				local waypointStarted =
+					os.clock()
+
+				local lastPosition =
+					root.Position
+
+				local stuckCheck =
+					os.clock()
+
+				humanoid:
+					MoveTo(
+						waypoint.Position
+					)
+
+				while alive do
+
+					if stopRequested
+						or runId ~= routeId
+					then
+
+						stopMovement()
+
+						return false,
+							"Stopped"
+					end
+
+					character,
+						humanoid,
+						root =
+						getCharacter()
+
+					if not character then
+
+						return false,
+							"Character lost"
+					end
+
+					local difference =
+						waypoint.Position
+						- root.Position
+
+					local horizontalDistance =
+						Vector3.new(
+							difference.X,
+							0,
+							difference.Z
+						).Magnitude
+
+					if horizontalDistance
+						<= distanceNeeded
+					then
+
+						break
+					end
+
+					if os.clock()
+						- waypointStarted
+						>= SETTINGS.WaypointTimeout
+					then
+
+						failed =
+							true
+
+						break
+					end
+
+					-- Refresh MoveTo occasionally.
+
+					humanoid:
+						MoveTo(
+							waypoint.Position
+						)
+
+					if os.clock()
+						- stuckCheck
+						>= SETTINGS.PathStuckCheckInterval
+					then
+
+						local moved =
+							(
+								root.Position
+								- lastPosition
+							).Magnitude
+
+						if moved
+							<= SETTINGS.PathMinimumMovement
+						then
+
+							humanoid.Jump =
+								true
+
+							humanoid:
+								MoveTo(
+									waypoint.Position
+								)
+						end
+
+						lastPosition =
+							root.Position
+
+						stuckCheck =
+							os.clock()
+					end
+
+					RunService.Heartbeat:
+						Wait()
+				end
+
+				if failed then
+					break
+				end
+			end
+
+			if not failed then
+
+				stopMovement()
+
+				return true
+			end
+		end
+
+		task.wait(
+			0.15
+		)
+	end
+
+	stopMovement()
+
+	return false,
+		"Path failed"
+end
+
+-- ==========================================================
+-- WALK ROUTER
+-- ==========================================================
+
+local function walkTo(
+	position,
+	distance,
+	runId
+)
+
+	if SETTINGS.MovementMode
+		== "Direct"
+	then
+
+		return directWalk(
+			position,
+			distance,
+			runId
+		)
+
+	else
+
+		return pathfindWalk(
+			position,
+			distance,
+			runId
+		)
+	end
+end
+
+-- ==========================================================
+-- MOVING PROXIMITY TARGET
+-- ==========================================================
+
+local function moveNearTarget(
+	node,
+	runId
+)
+
+	local target =
+		node.Target
+
+	if not target
+		or not target.Parent
+	then
+
+		return false,
+			"Target missing"
+	end
+
+	local requiredDistance =
+		node.Distance
+		or SETTINGS.DefaultProximityDistance
+
+	local lastMoveRefresh =
+		0
+
+	local lastStuckCheck =
+		os.clock()
+
+	local previousPosition =
+		nil
+
+	while alive do
+
+		if stopRequested
+			or runId ~= routeId
+		then
+
+			stopMovement()
+
+			return false,
+				"Stopped"
+		end
+
+		local targetPosition =
+			getInstancePosition(
+				target
+			)
+
+		local character,
+			humanoid,
+			root =
+			getCharacter()
+
+		if not targetPosition
+			or not character
+		then
+
+			return false,
+				"Target lost"
+		end
+
+		local difference =
+			targetPosition
+			- root.Position
+
+		local horizontalDistance =
+			Vector3.new(
+				difference.X,
+				0,
+				difference.Z
+			).Magnitude
+
+		if horizontalDistance
+			<= requiredDistance
+		then
+
+			stopMovement()
+
+			return true
+		end
+
+		-- ==================================================
+		-- DIRECT MODE
+		--
+		-- MoveTo gets refreshed with live target position.
+		-- ==================================================
+
+		if SETTINGS.MovementMode
+			== "Direct"
+		then
+
+			if os.clock()
+				- lastMoveRefresh
+				>= SETTINGS.DirectRefreshRate
+			then
+
+				humanoid:
+					MoveTo(
+						targetPosition
+					)
+
+				lastMoveRefresh =
+					os.clock()
+			end
+
+			if not previousPosition then
+
+				previousPosition =
+					root.Position
+			end
+
+			if os.clock()
+				- lastStuckCheck
+				>= SETTINGS.DirectStuckCheckInterval
+			then
+
+				local moved =
+					(
+						root.Position
+						- previousPosition
+					).Magnitude
+
+				if moved
+					<= SETTINGS.DirectMinimumMovement
+					and SETTINGS.DirectAutoJump
+				then
+
+					humanoid.Jump =
+						true
+
+					humanoid:
+						MoveTo(
+							targetPosition
+						)
+				end
+
+				previousPosition =
+					root.Position
+
+				lastStuckCheck =
+					os.clock()
+			end
+
+			RunService.Heartbeat:
+				Wait()
+
+		else
+
+			-- Pathfind toward latest target position.
+
+			local success =
+				pathfindWalk(
+					targetPosition,
+					math.max(
+						1,
+						requiredDistance
+							- 1
+					),
+					runId
+				)
+
+			if not success then
+
+				return false,
+					"Could not reach target"
+			end
+		end
+	end
+
+	return false
+end
+
+-- ==========================================================
+-- PRESS KEY
+-- ==========================================================
+
+local function pressKey(
+	keyCode,
+	duration
+)
+
+	VirtualInputManager:
+		SendKeyEvent(
+			true,
+			keyCode,
+			false,
+			game
+		)
+
+	task.wait(
+		math.max(
+			0.03,
+			duration or 0.08
+		)
+	)
+
+	VirtualInputManager:
+		SendKeyEvent(
+			false,
+			keyCode,
+			false,
+			game
+		)
+end
+
+-- ==========================================================
+-- PROMPT NODE
+-- ==========================================================
+
+local function executePrompt(
+	node,
+	runId
+)
+
+	local prompt =
+		node.Prompt
+
+	if not prompt
+		or not prompt.Parent
+		or not prompt:IsA(
+			"ProximityPrompt"
+		)
+	then
+
+		return false,
+			"Prompt missing"
+	end
+
+	local promptPosition =
+		getInstancePosition(
+			prompt
+		)
+
+	if not promptPosition then
+
+		return false,
+			"No prompt position"
+	end
+
+	local distance =
+		math.max(
+			1,
+			prompt.MaxActivationDistance
+				- 1
+		)
+
+	local reached =
+		walkTo(
+			promptPosition,
+			distance,
+			runId
+		)
+
+	if not reached then
+
+		return false,
+			"Could not reach prompt"
+	end
+
+	if stopRequested
+		or runId ~= routeId
+	then
+
+		return false,
+			"Stopped"
+	end
+
+	task.wait(
+		0.1
+	)
+
+	-- ======================================================
+	-- EXECUTOR FIREPROMPT
+	-- ======================================================
+
+	local firePrompt =
+		getgenv().
+			fireproximityprompt
+
+	if typeof(firePrompt)
+		== "function"
+	then
+
+		local success =
+			pcall(function()
+
+				firePrompt(
+					prompt
+				)
+			end)
+
+		if success then
+
+			return true
+		end
+	end
+
+	-- ======================================================
+	-- KEY FALLBACK
+	-- ======================================================
+
+	local key =
+		prompt.KeyboardKeyCode
+
+	if key
+		== Enum.KeyCode.Unknown
+	then
+
+		return false,
+			"No keyboard key"
+	end
+
+	pressKey(
+		key,
+		prompt.HoldDuration
+			+ 0.1
+	)
+
+	return true
+end
+
+-- ==========================================================
+-- EXECUTE NODE
+-- ==========================================================
+
+local function executeNode(
+	node,
+	runId
+)
+
+	if node.Type == "Walk" then
+
+		if typeof(
+			node.Position
+		)
+			~= "Vector3"
+		then
+
+			return false,
+				"No position"
+		end
+
+		return walkTo(
+			node.Position,
+			SETTINGS.MovementMode
+				== "Direct"
+				and SETTINGS.DirectArrivalDistance
+				or SETTINGS.FinalWaypointDistance,
+			runId
+		)
+
+	elseif node.Type == "Wait" then
+
+		local duration =
+			math.max(
+				0,
+				node.Duration
+					or 2
+			)
+
+		local started =
+			os.clock()
+
+		while os.clock()
+			- started
+			< duration
+		do
+
+			if stopRequested
+				or runId ~= routeId
+			then
+
+				return false,
+					"Stopped"
+			end
+
+			task.wait(
+				0.05
+			)
+		end
+
+		return true
+
+	elseif node.Type == "Proximity" then
+
+		return moveNearTarget(
+			node,
+			runId
+		)
+
+	elseif node.Type == "Prompt" then
+
+		return executePrompt(
+			node,
+			runId
+		)
+
+	elseif node.Type == "Jump" then
+
+		local _,
+			humanoid =
+			getCharacter()
+
+		if humanoid then
+
+			humanoid.Jump =
+				true
+
+			task.wait(
+				0.15
+			)
+
+			return true
+		end
+
+	elseif node.Type == "Key" then
+
+		if node.KeyCode then
+
+			pressKey(
+				node.KeyCode,
+				node.HoldDuration
+					or 0.08
+			)
+
+			return true
+		end
+	end
+
+	return false,
+		"Unknown node"
+end
+
+-- ==========================================================
+-- GUI CLEAN
+-- ==========================================================
+
+local oldGui =
+	playerGui:
+		FindFirstChild(
+			"NodeAutoDoerGui"
+		)
+
+if oldGui then
+	oldGui:Destroy()
+end
+
+-- ==========================================================
+-- GUI
+-- ==========================================================
+
+local gui =
+	Instance.new("ScreenGui")
+
+gui.Name =
+	"NodeAutoDoerGui"
+
+gui.ResetOnSpawn =
+	false
+
+gui.Parent =
+	playerGui
+
+local frame =
+	Instance.new("Frame")
+
+frame.Size =
+	UDim2.fromOffset(
+		400,
+		615
+	)
+
+frame.Position =
+	UDim2.new(
+		1,
+		-420,
+		0.08,
+		0
+	)
+
+frame.BackgroundColor3 =
+	Color3.fromRGB(
+		22,
+		22,
+		27
+	)
+
+frame.BorderSizePixel =
+	0
+
+frame.Active =
+	true
+
+frame.Draggable =
+	true
+
+frame.Parent =
+	gui
+
+local frameCorner =
+	Instance.new(
+		"UICorner",
+		frame
+	)
+
+frameCorner.CornerRadius =
+	UDim.new(
+		0,
+		9
+	)
+
+-- ==========================================================
+-- TITLE
+-- ==========================================================
+
+local title =
+	Instance.new("TextLabel")
+
+title.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		40
+	)
+
+title.BackgroundColor3 =
+	Color3.fromRGB(
+		34,
+		34,
+		41
+	)
+
+title.BorderSizePixel =
+	0
+
+title.Text =
+	"NODE AUTO-DOER"
+
+title.TextColor3 =
+	Color3.new(
+		1,
+		1,
+		1
+	)
+
+title.Font =
+	Enum.Font.SourceSansBold
+
+title.TextSize =
+	16
+
+title.Parent =
+	frame
+
+-- ==========================================================
+-- STATUS
+-- ==========================================================
+
+local status =
+	Instance.new("TextLabel")
+
+status.Size =
+	UDim2.new(
+		1,
+		-16,
+		0,
+		26
+	)
+
+status.Position =
+	UDim2.fromOffset(
+		8,
+		42
+	)
+
+status.BackgroundTransparency =
+	1
+
+status.Text =
+	"Ready"
+
+status.TextColor3 =
+	Color3.fromRGB(
+		180,
+		180,
+		190
+	)
+
+status.Font =
+	Enum.Font.SourceSans
+
+status.TextSize =
+	12
+
+status.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+status.Parent =
+	frame
+
+-- ==========================================================
+-- BUTTON
+-- ==========================================================
+
+local function makeButton(
+	parent,
+	text,
+	position,
+	size
+)
+
+	local button =
+		Instance.new("TextButton")
+
+	button.Position =
+		position
+
+	button.Size =
+		size
+
+	button.BackgroundColor3 =
+		Color3.fromRGB(
+			48,
+			48,
+			57
+		)
+
+	button.BorderSizePixel =
+		0
+
+	button.Text =
+		text
+
+	button.TextColor3 =
+		Color3.new(
+			1,
+			1,
+			1
+		)
+
+	button.Font =
+		Enum.Font.SourceSansBold
+
+	button.TextSize =
+		12
+
+	button.TextWrapped =
+		true
+
+	button.Parent =
+		parent
+
+	local corner =
+		Instance.new(
+			"UICorner",
+			button
+		)
+
+	corner.CornerRadius =
+		UDim.new(
+			0,
+			5
+		)
+
+	return button
+end
+
+-- ==========================================================
+-- MOVEMENT MODE
+-- ==========================================================
+
+local movementButton =
+	makeButton(
+		frame,
+		"",
+		UDim2.fromOffset(
+			8,
+			72
+		),
+		UDim2.fromOffset(
+			384,
+			36
+		)
+	)
+
+local function refreshMovementButton()
+
+	if SETTINGS.MovementMode
+		== "Direct"
+	then
+
+		movementButton.Text =
+			"MOVEMENT: DIRECT (NO PATHFINDING)"
+
+		movementButton.BackgroundColor3 =
+			Color3.fromRGB(
+				45,
+				110,
+				70
+			)
+
+	else
+
+		movementButton.Text =
+			"MOVEMENT: PATHFINDING"
+
+		movementButton.BackgroundColor3 =
+			Color3.fromRGB(
+				55,
+				75,
+				125
+			)
+	end
+end
+
+refreshMovementButton()
+
+movementButton.MouseButton1Click:
+	Connect(function()
+
+		if SETTINGS.MovementMode
+			== "Direct"
+		then
+
+			SETTINGS.MovementMode =
+				"Pathfinding"
+
+		else
+
+			SETTINGS.MovementMode =
+				"Direct"
+		end
+
+		refreshMovementButton()
+
+		status.Text =
+			"Movement: "
+			.. SETTINGS.MovementMode
+	end)
+
+-- ==========================================================
+-- RUN CONTROLS
+-- ==========================================================
+
+local runButton =
+	makeButton(
+		frame,
+		"RUN",
+		UDim2.fromOffset(
+			8,
+			114
+		),
+		UDim2.fromOffset(
+			87,
+			34
+		)
+	)
+
+runButton.BackgroundColor3 =
+	Color3.fromRGB(
+		45,
+		115,
+		70
+	)
+
+local stopButton =
+	makeButton(
+		frame,
+		"STOP",
+		UDim2.fromOffset(
+			101,
+			114
+		),
+		UDim2.fromOffset(
+			87,
+			34
+		)
+	)
+
+stopButton.BackgroundColor3 =
+	Color3.fromRGB(
+		145,
+		55,
+		55
+	)
+
+local loopButton =
+	makeButton(
+		frame,
+		"LOOP: OFF",
+		UDim2.fromOffset(
+			194,
+			114
+		),
+		UDim2.fromOffset(
+			96,
+			34
+		)
+	)
+
+local clearButton =
+	makeButton(
+		frame,
+		"CLEAR",
+		UDim2.fromOffset(
+			296,
+			114
+		),
+		UDim2.fromOffset(
+			96,
+			34
+		)
+	)
+
+-- ==========================================================
+-- ADD NODES
+-- ==========================================================
+
+local addLabel =
+	Instance.new("TextLabel")
+
+addLabel.Size =
+	UDim2.fromOffset(
+		384,
+		22
+	)
+
+addLabel.Position =
+	UDim2.fromOffset(
+		8,
+		154
+	)
+
+addLabel.BackgroundTransparency =
+	1
+
+addLabel.Text =
+	"ADD NODES"
+
+addLabel.TextColor3 =
+	Color3.fromRGB(
+		195,
+		195,
+		205
+	)
+
+addLabel.Font =
+	Enum.Font.SourceSansBold
+
+addLabel.TextSize =
+	12
+
+addLabel.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+addLabel.Parent =
+	frame
+
+local walkHereButton =
+	makeButton(
+		frame,
+		"WALK HERE",
+		UDim2.fromOffset(
+			8,
+			180
+		),
+		UDim2.fromOffset(
+			92,
+			34
+		)
+	)
+
+local placeWalkButton =
+	makeButton(
+		frame,
+		"PLACE WALK",
+		UDim2.fromOffset(
+			106,
+			180
+		),
+		UDim2.fromOffset(
+			92,
+			34
+		)
+	)
+
+local waitButton =
+	makeButton(
+		frame,
+		"WAIT",
+		UDim2.fromOffset(
+			204,
+			180
+		),
+		UDim2.fromOffset(
+			88,
+			34
+		)
+	)
+
+local jumpButton =
+	makeButton(
+		frame,
+		"JUMP",
+		UDim2.fromOffset(
+			298,
+			180
+		),
+		UDim2.fromOffset(
+			94,
+			34
+		)
+	)
+
+local proximityButton =
+	makeButton(
+		frame,
+		"SELECT PROX",
+		UDim2.fromOffset(
+			8,
+			220
+		),
+		UDim2.fromOffset(
+			120,
+			34
+		)
+	)
+
+local promptButton =
+	makeButton(
+		frame,
+		"SELECT PROMPT",
+		UDim2.fromOffset(
+			134,
+			220
+		),
+		UDim2.fromOffset(
+			124,
+			34
+		)
+	)
+
+local keyButton =
+	makeButton(
+		frame,
+		"ADD KEY",
+		UDim2.fromOffset(
+			264,
+			220
+		),
+		UDim2.fromOffset(
+			128,
+			34
+		)
+	)
+
+-- ==========================================================
+-- NODE LIST
+-- ==========================================================
+
+local nodeList =
+	Instance.new(
+		"ScrollingFrame"
+	)
+
+nodeList.Size =
+	UDim2.fromOffset(
+		384,
+		220
+	)
+
+nodeList.Position =
+	UDim2.fromOffset(
+		8,
+		262
+	)
+
+nodeList.BackgroundColor3 =
+	Color3.fromRGB(
+		16,
+		16,
+		20
+	)
+
+nodeList.BorderSizePixel =
+	0
+
+nodeList.ScrollBarThickness =
+	5
+
+nodeList.CanvasSize =
+	UDim2.new()
+
+nodeList.Parent =
+	frame
+
+local listLayout =
+	Instance.new(
+		"UIListLayout"
+	)
+
+listLayout.Padding =
+	UDim.new(
+		0,
+		4
+	)
+
+listLayout.Parent =
+	nodeList
+
+-- ==========================================================
+-- EDITOR
+-- ==========================================================
+
+local editorLabel =
+	Instance.new("TextLabel")
+
+editorLabel.Size =
+	UDim2.fromOffset(
+		384,
+		22
+	)
+
+editorLabel.Position =
+	UDim2.fromOffset(
+		8,
+		490
+	)
+
+editorLabel.BackgroundTransparency =
+	1
+
+editorLabel.Text =
+	"SELECT A NODE"
+
+editorLabel.TextColor3 =
+	Color3.fromRGB(
+		195,
+		195,
+		205
+	)
+
+editorLabel.Font =
+	Enum.Font.SourceSansBold
+
+editorLabel.TextSize =
+	12
+
+editorLabel.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+editorLabel.Parent =
+	frame
+
+local upButton =
+	makeButton(
+		frame,
+		"▲",
+		UDim2.fromOffset(
+			8,
+			516
+		),
+		UDim2.fromOffset(
+			52,
+			32
+		)
+	)
+
+local downButton =
+	makeButton(
+		frame,
+		"▼",
+		UDim2.fromOffset(
+			66,
+			516
+		),
+		UDim2.fromOffset(
+			52,
+			32
+		)
+	)
+
+local minusButton =
+	makeButton(
+		frame,
+		"-",
+		UDim2.fromOffset(
+			124,
+			516
+		),
+		UDim2.fromOffset(
+			52,
+			32
+		)
+	)
+
+local plusButton =
+	makeButton(
+		frame,
+		"+",
+		UDim2.fromOffset(
+			182,
+			516
+		),
+		UDim2.fromOffset(
+			52,
+			32
+		)
+	)
+
+local editButton =
+	makeButton(
+		frame,
+		"EDIT",
+		UDim2.fromOffset(
+			240,
+			516
+		),
+		UDim2.fromOffset(
+			70,
+			32
+		)
+	)
+
+local deleteButton =
+	makeButton(
+		frame,
+		"DELETE",
+		UDim2.fromOffset(
+			316,
+			516
+		),
+		UDim2.fromOffset(
+			76,
+			32
+		)
+	)
+
+deleteButton.BackgroundColor3 =
+	Color3.fromRGB(
+		135,
+		50,
+		50
+	)
+
+local killButton =
+	makeButton(
+		frame,
+		"KILL SCRIPT",
+		UDim2.fromOffset(
+			8,
+			560
+		),
+		UDim2.fromOffset(
+			384,
+			42
+		)
+	)
+
+killButton.BackgroundColor3 =
+	Color3.fromRGB(
+		165,
+		38,
+		38
+	)
+
+-- ==========================================================
+-- GUI LIST LOGIC
+-- ==========================================================
+
+local rows = {}
+
+local function clearRows()
+
+	for _, row in ipairs(
+		rows
+	) do
+
+		if row
+			and row.Parent
+		then
+
+			row:
+				Destroy()
+		end
+	end
+
+	table.clear(
+		rows
+	)
+end
+
+local function updateEditor()
+
+	local node =
+		selectedNodeIndex
+		and nodes[
+			selectedNodeIndex
+		]
+
+	if not node then
+
+		editorLabel.Text =
+			"SELECT A NODE"
+
+		return
+	end
+
+	if node.Type == "Wait" then
+
+		editorLabel.Text =
+			"WAIT: "
+			.. string.format(
+				"%.1fs",
+				node.Duration
+					or 2
+			)
+
+	elseif node.Type == "Proximity" then
+
+		editorLabel.Text =
+			"PROX DISTANCE: "
+			.. tostring(
+				node.Distance
+					or 6
+			)
+
+	elseif node.Type == "Key" then
+
+		editorLabel.Text =
+			"KEY: "
+			.. (
+				node.KeyCode
+				and node.KeyCode.Name
+				or "None"
+			)
+
+	else
+
+		editorLabel.Text =
+			node.Type
+	end
+end
+
+local rebuildList
+
+rebuildList =
+	function()
+
+		clearRows()
+
+		for index, node in ipairs(
+			nodes
+		) do
+
+			local row =
+				Instance.new(
+					"TextButton"
+				)
+
+			row.Size =
+				UDim2.new(
+					1,
+					-8,
+					0,
+					34
+				)
+
+			row.BackgroundColor3 =
+				index
+					== selectedNodeIndex
+					and Color3.fromRGB(
+						55,
+						80,
+						120
+					)
+					or Color3.fromRGB(
+						39,
+						39,
+						47
+					)
+
+			row.BorderSizePixel =
+				0
+
+			row.Text =
+				nodeText(
+					node,
+					index
+				)
+
+			row.TextColor3 =
+				Color3.new(
+					1,
+					1,
+					1
+				)
+
+			row.TextSize =
+				12
+
+			row.Font =
+				Enum.Font.SourceSans
+
+			row.TextXAlignment =
+				Enum.TextXAlignment.Left
+
+			row.Parent =
+				nodeList
+
+			row.MouseButton1Click:
+				Connect(function()
+
+					selectedNodeIndex =
+						index
+
+					rebuildList()
+
+					updateMarkers()
+				end)
+
+			table.insert(
+				rows,
+				row
+			)
+		end
+
+		nodeList.CanvasSize =
+			UDim2.fromOffset(
+				0,
+				#nodes * 38
+			)
+
+		updateEditor()
+
+		rebuildMarkers()
+
+		updateMarkers()
+	end
+
+-- ==========================================================
+-- ADD NODE
+-- ==========================================================
+
+local function addNode(node)
+
+	table.insert(
+		nodes,
+		node
+	)
+
+	selectedNodeIndex =
+		#nodes
+
+	rebuildList()
+end
+
+-- ==========================================================
+-- NODE BUTTON EVENTS
+-- ==========================================================
+
+walkHereButton.MouseButton1Click:
+	Connect(function()
+
+		local _,
+			_,
+			root =
+			getCharacter()
+
+		if root then
+
+			addNode({
+
+				Type =
+					"Walk",
+
+				Position =
+					root.Position
+			})
+
+			status.Text =
+				"Walk node added."
+		end
+	end)
+
+placeWalkButton.MouseButton1Click:
+	Connect(function()
+
+		placementMode =
+			"Walk"
+
+		status.Text =
+			"Click world position."
+	end)
+
+waitButton.MouseButton1Click:
+	Connect(function()
+
+		addNode({
+
+			Type =
+				"Wait",
+
+			Duration =
+				2
+		})
+	end)
+
+jumpButton.MouseButton1Click:
+	Connect(function()
+
+		addNode({
+
+			Type =
+				"Jump"
+		})
+	end)
+
+proximityButton.MouseButton1Click:
+	Connect(function()
+
+		placementMode =
+			"Proximity"
+
+		status.Text =
+			"Click proximity target."
+	end)
+
+promptButton.MouseButton1Click:
+	Connect(function()
+
+		placementMode =
+			"Prompt"
+
+		status.Text =
+			"Click object with prompt."
+	end)
+
+keyButton.MouseButton1Click:
+	Connect(function()
+
+		addNode({
+
+			Type =
+				"Key",
+
+			KeyCode =
+				Enum.KeyCode.R,
+
+			HoldDuration =
+				0.08
+		})
+	end)
+
+-- ==========================================================
+-- FIND PROMPT
+-- ==========================================================
+
+local function findPrompt(
+	part
+)
+
+	if not part then
+
+		return nil
+	end
+
+	local prompt =
+		part:
+			FindFirstChildWhichIsA(
+				"ProximityPrompt",
+				true
+			)
+
+	if prompt then
+
+		return prompt
+	end
+
+	local current =
+		part.Parent
+
+	for _ = 1, 6 do
+
+		if not current then
+
+			break
+		end
+
+		local found =
+			current:
+				FindFirstChildWhichIsA(
+					"ProximityPrompt",
+					true
+				)
+
+		if found then
+
+			return found
+		end
+
+		current =
+			current.Parent
+	end
+
+	return nil
+end
+
+-- ==========================================================
+-- WORLD CLICK PLACEMENT
+-- ==========================================================
+
+track(
+	mouse.Button1Down:
+		Connect(function()
+
+			if not placementMode then
+
+				return
+			end
+
+			local target =
+				mouse.Target
+
+			if placementMode
+				== "Walk"
+			then
+
+				addNode({
+
+					Type =
+						"Walk",
+
+					Position =
+						mouse.Hit.Position
+				})
+
+				placementMode =
+					nil
+
+			elseif placementMode
+				== "Proximity"
+			then
+
+				if target then
+
+					addNode({
+
+						Type =
+							"Proximity",
+
+						Target =
+							target,
+
+						Distance =
+							SETTINGS.DefaultProximityDistance
+					})
+				end
+
+				placementMode =
+					nil
+
+			elseif placementMode
+				== "Prompt"
+			then
+
+				local prompt =
+					findPrompt(
+						target
+					)
+
+				if prompt then
+
+					addNode({
+
+						Type =
+							"Prompt",
+
+						Prompt =
+							prompt
+					})
+
+				else
+
+					status.Text =
+						"No prompt found."
+				end
+
+				placementMode =
+					nil
+
+			elseif selectedNodeIndex then
+
+				local node =
+					nodes[
+						selectedNodeIndex
+					]
+
+				if placementMode
+					== "EditWalk"
+				then
+
+					node.Position =
+						mouse.Hit.Position
+
+					placementMode =
+						nil
+
+					rebuildList()
+
+				elseif placementMode
+					== "EditProximity"
+				then
+
+					if target then
+
+						node.Target =
+							target
+
+						placementMode =
+							nil
+
+						rebuildList()
+					end
+
+				elseif placementMode
+					== "EditPrompt"
+				then
+
+					local prompt =
+						findPrompt(
+							target
+						)
+
+					if prompt then
+
+						node.Prompt =
+							prompt
+
+						placementMode =
+							nil
+
+						rebuildList()
+					end
+				end
+			end
+		end)
+)
+
+-- ==========================================================
+-- REORDER
+-- ==========================================================
+
+upButton.MouseButton1Click:
+	Connect(function()
+
+		local i =
+			selectedNodeIndex
+
+		if not i
+			or i <= 1
+		then
+
+			return
+		end
+
+		nodes[i],
+			nodes[i - 1] =
+			nodes[i - 1],
+			nodes[i]
+
+		selectedNodeIndex =
+			i - 1
+
+		rebuildList()
+	end)
+
+downButton.MouseButton1Click:
+	Connect(function()
+
+		local i =
+			selectedNodeIndex
+
+		if not i
+			or i >= #nodes
+		then
+
+			return
+		end
+
+		nodes[i],
+			nodes[i + 1] =
+			nodes[i + 1],
+			nodes[i]
+
+		selectedNodeIndex =
+			i + 1
+
+		rebuildList()
+	end)
+
+-- ==========================================================
+-- VALUES
+-- ==========================================================
+
+minusButton.MouseButton1Click:
+	Connect(function()
+
+		local node =
+			selectedNodeIndex
+			and nodes[
+				selectedNodeIndex
+			]
+
+		if not node then
+			return
+		end
+
+		if node.Type == "Wait" then
+
+			node.Duration =
+				math.max(
+					0,
+					(node.Duration or 2)
+						- 0.5
+				)
+
+		elseif node.Type == "Proximity" then
+
+			node.Distance =
+				math.max(
+					1,
+					(node.Distance or 6)
+						- 1
+				)
+
+		elseif node.Type == "Key" then
+
+			node.HoldDuration =
+				math.max(
+					0.05,
+					(node.HoldDuration or 0.08)
+						- 0.1
+				)
+		end
+
+		rebuildList()
+	end)
+
+plusButton.MouseButton1Click:
+	Connect(function()
+
+		local node =
+			selectedNodeIndex
+			and nodes[
+				selectedNodeIndex
+			]
+
+		if not node then
+			return
+		end
+
+		if node.Type == "Wait" then
+
+			node.Duration =
+				math.min(
+					60,
+					(node.Duration or 2)
+						+ 0.5
+				)
+
+		elseif node.Type == "Proximity" then
+
+			node.Distance =
+				math.min(
+					100,
+					(node.Distance or 6)
+						+ 1
+				)
+
+		elseif node.Type == "Key" then
+
+			node.HoldDuration =
+				math.min(
+					10,
+					(node.HoldDuration or 0.08)
+						+ 0.1
+				)
+		end
+
+		rebuildList()
+	end)
+
+-- ==========================================================
+-- EDIT
+-- ==========================================================
+
+editButton.MouseButton1Click:
+	Connect(function()
+
+		local node =
+			selectedNodeIndex
+			and nodes[
+				selectedNodeIndex
+			]
+
+		if not node then
+			return
+		end
+
+		if node.Type == "Walk" then
+
+			placementMode =
+				"EditWalk"
+
+			status.Text =
+				"Click new walk position."
+
+		elseif node.Type == "Proximity" then
+
+			placementMode =
+				"EditProximity"
+
+			status.Text =
+				"Click new target."
+
+		elseif node.Type == "Prompt" then
+
+			placementMode =
+				"EditPrompt"
+
+			status.Text =
+				"Click new prompt."
+
+		elseif node.Type == "Key" then
+
+			keyCaptureNode =
+				selectedNodeIndex
+
+			status.Text =
+				"Press key."
+		end
+	end)
+
+-- ==========================================================
+-- DELETE
+-- ==========================================================
+
+deleteButton.MouseButton1Click:
+	Connect(function()
+
+		if not selectedNodeIndex then
+
+			return
+		end
+
+		table.remove(
+			nodes,
+			selectedNodeIndex
+		)
+
+		if selectedNodeIndex
+			> #nodes
+		then
+
+			selectedNodeIndex =
+				#nodes > 0
+				and #nodes
+				or nil
+		end
+
+		rebuildList()
+	end)
+
+-- ==========================================================
+-- KEY CAPTURE
+-- ==========================================================
+
+track(
+	UserInputService.InputBegan:
+		Connect(function(
+			input,
+			processed
+		)
+
+			if processed
+				or not keyCaptureNode
+			then
+
+				return
+			end
+
+			if input.UserInputType
+				~= Enum.UserInputType.Keyboard
+			then
+
+				return
+			end
+
+			local node =
+				nodes[
+					keyCaptureNode
+				]
+
+			if node
+				and node.Type == "Key"
+			then
+
+				node.KeyCode =
+					input.KeyCode
+
+				status.Text =
+					"Key = "
+					.. input.KeyCode.Name
+			end
+
+			keyCaptureNode =
+				nil
+
+			rebuildList()
+		end)
+)
+
+-- ==========================================================
+-- LOOP
+-- ==========================================================
+
+loopButton.MouseButton1Click:
+	Connect(function()
+
+		loopRoute =
+			not loopRoute
+
+		loopButton.Text =
+			loopRoute
+				and "LOOP: ON"
+				or "LOOP: OFF"
+
+		loopButton.BackgroundColor3 =
+			loopRoute
+				and Color3.fromRGB(
+					45,
+					110,
+					70
+				)
+				or Color3.fromRGB(
+					48,
+					48,
+					57
+				)
+	end)
+
+-- ==========================================================
+-- STOP ROUTE
+-- ==========================================================
+
+local function stopRoute()
+
+	stopRequested =
+		true
+
+	executing =
+		false
+
+	routeId +=
+		1
+
+	currentNodeIndex =
+		nil
+
+	stopMovement()
+
+	status.Text =
+		"Stopped."
+
+	updateMarkers()
+end
+
+stopButton.MouseButton1Click:
+	Connect(
+		stopRoute
+	)
+
+-- ==========================================================
+-- RUN ROUTE
+-- ==========================================================
+
+local function runRoute()
+
+	if executing then
+
+		return
+	end
+
+	if #nodes == 0 then
+
+		status.Text =
+			"No nodes."
+
+		return
+	end
+
+	executing =
+		true
+
+	stopRequested =
+		false
+
+	routeId +=
+		1
+
+	local thisRun =
+		routeId
+
+	task.spawn(function()
+
+		repeat
+
+			for index, node in ipairs(
+				nodes
+			) do
+
+				if stopRequested
+					or thisRun ~= routeId
+				then
+
+					break
+				end
+
+				currentNodeIndex =
+					index
+
+				status.Text =
+					nodeText(
+						node,
+						index
+					)
+					.. " | "
+					.. SETTINGS.MovementMode
+
+				updateMarkers()
+
+				local success,
+					reason =
+					executeNode(
+						node,
+						thisRun
+					)
+
+				if stopRequested
+					or thisRun ~= routeId
+				then
+
+					break
+				end
+
+				if not success then
+
+					executing =
+						false
+
+					currentNodeIndex =
+						nil
+
+					stopMovement()
+
+					status.Text =
+						"FAILED: "
+						.. tostring(
+							reason
+								or "Unknown"
+						)
+
+					updateMarkers()
+
+					return
+				end
+
+				task.wait(
+					0.05
+				)
+			end
+
+			if stopRequested
+				or thisRun ~= routeId
+			then
+
+				break
+			end
+
+		until not loopRoute
+
+		executing =
+			false
+
+		currentNodeIndex =
+			nil
+
+		stopMovement()
+
+		if not stopRequested then
+
+			status.Text =
+				"Route complete."
+		end
+
+		updateMarkers()
+	end)
+end
+
+runButton.MouseButton1Click:
+	Connect(
+		runRoute
+	)
+
+-- ==========================================================
+-- CLEAR
+-- ==========================================================
+
+clearButton.MouseButton1Click:
+	Connect(function()
+
+		stopRoute()
+
+		table.clear(
+			nodes
+		)
+
+		selectedNodeIndex =
+			nil
+
+		rebuildList()
+
+		status.Text =
+			"Nodes cleared."
+	end)
+
+-- ==========================================================
+-- LIVE MARKERS
+-- ==========================================================
+
+local accumulator =
+	0
+
+track(
+	RunService.RenderStepped:
+		Connect(function(dt)
+
+			if not alive then
+				return
+			end
+
+			accumulator += dt
+
+			if accumulator < 0.1 then
+				return
+			end
+
+			accumulator = 0
+
+			updateMarkers()
+		end)
+)
+
+-- ==========================================================
+-- PUBLIC API
+-- ==========================================================
+
+getgenv().NodeAutoDoer = {
+
+	Nodes =
+		nodes,
+
+	Run =
+		runRoute,
+
+	Stop =
+		stopRoute,
+
+	SetDirect =
+		function()
+
+			SETTINGS.MovementMode =
+				"Direct"
+
+			refreshMovementButton()
+		end,
+
+	SetPathfinding =
+		function()
+
+			SETTINGS.MovementMode =
+				"Pathfinding"
+
+			refreshMovementButton()
+		end,
+
+	Refresh =
+		rebuildList
+}
+
+-- ==========================================================
+-- CLEANUP
+-- ==========================================================
+
+local function cleanup()
+
+	if not alive then
+		return
+	end
+
+	alive =
+		false
+
+	stopRoute()
+
+	for _, connection in ipairs(
+		connections
+	) do
+
+		pcall(function()
+
+			connection:
+				Disconnect()
+
+		end)
+	end
+
+	table.clear(
+		connections
+	)
+
+	if markerFolder
+		and markerFolder.Parent
+	then
+
+		markerFolder:
+			Destroy()
+	end
+
+	if gui
+		and gui.Parent
+	then
+
+		gui:
+			Destroy()
+	end
+
+	getgenv().NodeAutoDoer =
+		nil
+
+	getgenv().NodeAutoDoerCleanup =
+		nil
+
+	print(
+		"Node Auto-Doer killed."
+	)
+end
+
+getgenv().NodeAutoDoerCleanup =
+	cleanup
+
+killButton.MouseButton1Click:
+	Connect(
+		cleanup
+	)
+
+-- ==========================================================
+-- START
+-- ==========================================================
+
+rebuildList()
+
+status.Text =
+	"Ready | DIRECT movement"
+
+print("==========================================")
+print("NODE AUTO-DOER")
+print("==========================================")
+print("")
+print("DIRECT MODE FIXED")
+print("")
+print("Direct now uses Humanoid:MoveTo()")
+print("instead of Humanoid:Move().")
+print("")
+print("Movement defaults to DIRECT.")
+print("Click movement button for Pathfinding.")
+print("")
+print("==========================================")
