@@ -1,27 +1,43 @@
 -- ==========================================================
--- R6 STUNT + RAGDOLL PLAYGROUND
--- TORSO-ONLY COLLISION VERSION
+-- R6 STUNT / RAGDOLL LAB
+-- PHYSICAL-CONTACT BOUNCE EDITION
 -- ==========================================================
---
--- DEFAULT BINDS:
 --
 -- R = Ragdoll
 -- F = Frontflip
 -- G = Backflip
 -- T = Dive
--- Y = Spin Jump
+-- Y = Spin
 --
--- RAGDOLL COLLISION:
--- Torso = ON
--- Everything else = OFF
+-- BOUNCE FIX:
+--   - NO Blockcast teleporting
+--   - NO CFrame push-outs
+--   - NO predictive collision replacement
+--
+-- Roblox performs the actual collision.
+-- Touched then redirects the incoming velocity.
 --
 -- ==========================================================
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+-- ==========================================================
+-- CLEAN PREVIOUS VERSION
+-- ==========================================================
+
+if _G.R6StuntCleanup then
+	pcall(_G.R6StuntCleanup)
+end
+
+-- ==========================================================
+-- CHARACTER
+-- ==========================================================
 
 local character =
 	player.Character
@@ -29,6 +45,10 @@ local character =
 
 local humanoid =
 	character:WaitForChild("Humanoid")
+
+if humanoid.RigType ~= Enum.HumanoidRigType.R6 then
+	error("This script requires R6.")
+end
 
 local root =
 	character:WaitForChild("HumanoidRootPart")
@@ -54,29 +74,59 @@ local rightLeg =
 humanoid.RequiresNeck = false
 
 -- ==========================================================
--- CLEAN OLD VERSION
--- ==========================================================
-
-if _G.R6StuntCleanup then
-	pcall(_G.R6StuntCleanup)
-end
-
--- ==========================================================
 -- CONFIG
 -- ==========================================================
 
 local config = {
+
+	-- RAGDOLL
+
+	Boneless = true,
+
+	TorsoOnlyCollision = true,
+
+	BackupTorsoCollider = true,
+
+	PreserveMomentum = true,
+
+	ExtraFlop = true,
+
+	ZeroFriction = false,
+
+	-- BOUNCE
+
+	Bounce = false,
+
+	BounceAngle = 45,
+
+	BouncePower = 1,
+
+	BounceMinSpeed = 6,
+
+	BounceCooldown = 0.09,
+
+	-- AUTO GET UP
+
+	AutoGetUp = false,
+
+	AutoGetUpDelay = 3,
+
+	-- STUNTS
+
 	FailureChance = 30,
 
 	FrontflipPower = 52,
+
 	BackflipPower = 52,
 
 	DiveForwardPower = 58,
+
 	DiveUpPower = 18,
 
 	SpinPower = 48,
 
 	FlipAngularSpeed = 12,
+
 	SpinAngularSpeed = 14
 }
 
@@ -85,19 +135,16 @@ local config = {
 -- ==========================================================
 
 local binds = {
-	Ragdoll = Enum.KeyCode.R,
-	Frontflip = Enum.KeyCode.F,
-	Backflip = Enum.KeyCode.G,
-	Dive = Enum.KeyCode.T,
-	Spin = Enum.KeyCode.Y
-}
 
-local actionOrder = {
-	"Ragdoll",
-	"Frontflip",
-	"Backflip",
-	"Dive",
-	"Spin"
+	Ragdoll = Enum.KeyCode.R,
+
+	Frontflip = Enum.KeyCode.F,
+
+	Backflip = Enum.KeyCode.G,
+
+	Dive = Enum.KeyCode.T,
+
+	Spin = Enum.KeyCode.Y
 }
 
 -- ==========================================================
@@ -107,28 +154,78 @@ local actionOrder = {
 local running = true
 
 local ragdolled = false
+
 local doingTrick = false
 
 local awaitingBind = nil
 
+local autoGetUpToken = 0
+
 local connections = {}
 
-local createdRagdollObjects = {}
-local originalCollision = {}
+local ragdollObjects = {}
+
+local ragdollConnections = {}
+
+local originalMotorStates = {}
+
+local originalCollisionStates = {}
+
+local originalPhysicalProperties = {}
 
 local bindButtons = {}
 
+local bindRefreshers = {}
+
+local collisionEnforcer = nil
+
+local velocityTracker = nil
+
+local lastPhysicsVelocity =
+	Vector3.zero
+
+local lastBounceTime = 0
+
+local lastBouncePart = nil
+
 -- ==========================================================
--- CONNECTION TRACKER
+-- CONNECTION TRACKING
 -- ==========================================================
 
-local function trackConnection(connection)
+local function track(connection)
+
 	table.insert(
 		connections,
 		connection
 	)
 
 	return connection
+end
+
+local function trackRagdollConnection(connection)
+
+	table.insert(
+		ragdollConnections,
+		connection
+	)
+
+	return connection
+end
+
+local function disconnectRagdollConnections()
+
+	for _, connection in ipairs(
+		ragdollConnections
+	) do
+
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+
+	table.clear(
+		ragdollConnections
+	)
 end
 
 -- ==========================================================
@@ -170,14 +267,29 @@ local leftHip =
 local rightHip =
 	findMotor("Right Hip")
 
+local motors = {
+
+	rootJoint,
+
+	neck,
+
+	leftShoulder,
+
+	rightShoulder,
+
+	leftHip,
+
+	rightHip
+}
+
 -- ==========================================================
--- RAGDOLL OBJECT TRACKER
+-- OBJECT TRACKING
 -- ==========================================================
 
-local function rememberRagdollObject(object)
+local function remember(object)
 
 	table.insert(
-		createdRagdollObjects,
+		ragdollObjects,
 		object
 	)
 
@@ -185,10 +297,10 @@ local function rememberRagdollObject(object)
 end
 
 -- ==========================================================
--- ATTACHMENTS
+-- ATTACHMENT
 -- ==========================================================
 
-local function makeAttachment(
+local function createAttachment(
 	part,
 	cframe,
 	name
@@ -206,21 +318,18 @@ local function makeAttachment(
 	attachment.Parent =
 		part
 
-	return rememberRagdollObject(
+	return remember(
 		attachment
 	)
 end
 
 -- ==========================================================
--- SOCKETS
+-- SOCKET
 -- ==========================================================
 
-local function makeBallSocket(
+local function createSocket(
 	motor,
-	name,
-	upperAngle,
-	twistLower,
-	twistUpper
+	name
 )
 
 	if not motor then
@@ -236,18 +345,19 @@ local function makeBallSocket(
 	if not part0
 		or not part1
 	then
+
 		return
 	end
 
 	local attachment0 =
-		makeAttachment(
+		createAttachment(
 			part0,
 			motor.C0,
 			name .. "_A0"
 		)
 
 	local attachment1 =
-		makeAttachment(
+		createAttachment(
 			part1,
 			motor.C1,
 			name .. "_A1"
@@ -267,331 +377,963 @@ local function makeBallSocket(
 	socket.Attachment1 =
 		attachment1
 
-	socket.LimitsEnabled =
-		true
-
-	socket.UpperAngle =
-		upperAngle
-
-	socket.TwistLimitsEnabled =
-		true
-
-	socket.TwistLowerAngle =
-		twistLower
-
-	socket.TwistUpperAngle =
-		twistUpper
-
 	socket.Restitution =
 		0
+
+	if config.Boneless then
+
+		socket.LimitsEnabled =
+			false
+
+		socket.TwistLimitsEnabled =
+			false
+
+	else
+
+		socket.LimitsEnabled =
+			true
+
+		socket.UpperAngle =
+			100
+
+		socket.TwistLimitsEnabled =
+			true
+
+		socket.TwistLowerAngle =
+			-90
+
+		socket.TwistUpperAngle =
+			90
+	end
 
 	socket.Parent =
 		part0
 
-	return rememberRagdollObject(
+	return remember(
 		socket
 	)
 end
 
 -- ==========================================================
--- COLLISION MEMORY
+-- CREATE RAGDOLL
 -- ==========================================================
 
-local function rememberCollisionStates()
+local function createRagdollJoints()
 
-	originalCollision =
-		{}
+	createSocket(
+		rootJoint,
+		"RagdollRoot"
+	)
+
+	createSocket(
+		neck,
+		"RagdollNeck"
+	)
+
+	createSocket(
+		leftShoulder,
+		"RagdollLeftShoulder"
+	)
+
+	createSocket(
+		rightShoulder,
+		"RagdollRightShoulder"
+	)
+
+	createSocket(
+		leftHip,
+		"RagdollLeftHip"
+	)
+
+	createSocket(
+		rightHip,
+		"RagdollRightHip"
+	)
+end
+
+-- ==========================================================
+-- MOTOR STATES
+-- ==========================================================
+
+local function saveMotorStates()
+
+	originalMotorStates = {}
+
+	for _, motor in ipairs(
+		motors
+	) do
+
+		if motor
+			and motor.Parent
+		then
+
+			originalMotorStates[motor] =
+				motor.Enabled
+		end
+	end
+end
+
+local function disableMotors()
+
+	for _, motor in ipairs(
+		motors
+	) do
+
+		if motor
+			and motor.Parent
+		then
+
+			motor.Enabled =
+				false
+		end
+	end
+end
+
+local function restoreMotorStates()
+
+	for motor, previous in pairs(
+		originalMotorStates
+	) do
+
+		if motor
+			and motor.Parent
+		then
+
+			motor.Enabled =
+				previous
+		end
+	end
+
+	originalMotorStates = {}
+end
+
+-- ==========================================================
+-- COLLISION STATES
+-- ==========================================================
+
+local function saveCollisionStates()
+
+	originalCollisionStates = {}
 
 	for _, object in ipairs(
-		character:GetChildren()
+		character:GetDescendants()
 	) do
 
 		if object:IsA("BasePart") then
 
-			originalCollision[
-				object
-			] =
+			originalCollisionStates[object] =
 				object.CanCollide
 		end
 	end
 end
 
+local function restoreCollisionStates()
+
+	for part, previous in pairs(
+		originalCollisionStates
+	) do
+
+		if part
+			and part.Parent
+		then
+
+			part.CanCollide =
+				previous
+		end
+	end
+
+	originalCollisionStates = {}
+end
+
 -- ==========================================================
--- TORSO-ONLY COLLISIONS
+-- PHYSICAL PROPERTIES
+--
+-- Wrapper tables are intentional.
+-- CustomPhysicalProperties may be nil.
 -- ==========================================================
 
-local function applyFunnyRagdollCollisions()
+local function savePhysicalProperties()
+
+	originalPhysicalProperties = {}
 
 	for _, object in ipairs(
-		character:GetChildren()
+		character:GetDescendants()
 	) do
 
 		if object:IsA("BasePart") then
 
-			object.CanCollide =
-				false
+			originalPhysicalProperties[object] = {
+				Value =
+					object.CustomPhysicalProperties
+			}
+		end
+	end
+end
+
+local function getOriginalProperties(part)
+
+	local stored =
+		originalPhysicalProperties[part]
+
+	if stored then
+		return stored.Value
+	end
+
+	return nil
+end
+
+local function restorePhysicalProperties()
+
+	for part, stored in pairs(
+		originalPhysicalProperties
+	) do
+
+		if part
+			and part.Parent
+		then
+
+			part.CustomPhysicalProperties =
+				stored.Value
 		end
 	end
 
-	-- ONLY THE TORSO COLLIDES.
-	torso.CanCollide =
-		true
-
-	root.CanCollide =
-		false
-
-	head.CanCollide =
-		false
-
-	leftArm.CanCollide =
-		false
-
-	rightArm.CanCollide =
-		false
-
-	leftLeg.CanCollide =
-		false
-
-	rightLeg.CanCollide =
-		false
+	originalPhysicalProperties = {}
 end
 
 -- ==========================================================
--- RAGDOLL JOINTS
+-- FRICTION PROPERTIES
 -- ==========================================================
 
-local function createRagdollJoints()
-
-	makeBallSocket(
-		neck,
-		"RagdollNeck",
-		60,
-		-75,
-		75
+local NORMAL_COLLIDER_PROPERTIES =
+	PhysicalProperties.new(
+		0.7,
+		0.5,
+		0,
+		100,
+		0
 	)
 
-	makeBallSocket(
-		leftShoulder,
-		"RagdollLeftShoulder",
-		135,
-		-160,
-		160
+local ZERO_FRICTION_PROPERTIES =
+	PhysicalProperties.new(
+		0.7,
+		0,
+		0,
+		100,
+		0
 	)
-
-	makeBallSocket(
-		rightShoulder,
-		"RagdollRightShoulder",
-		135,
-		-160,
-		160
-	)
-
-	makeBallSocket(
-		leftHip,
-		"RagdollLeftHip",
-		105,
-		-100,
-		100
-	)
-
-	makeBallSocket(
-		rightHip,
-		"RagdollRightHip",
-		105,
-		-100,
-		100
-	)
-end
 
 -- ==========================================================
--- MOTOR CONTROL
+-- APPLY FRICTION MODE
 -- ==========================================================
 
-local function disableMotors()
-
-	if rootJoint then
-		rootJoint.Enabled =
-			false
-	end
-
-	if neck then
-		neck.Enabled =
-			false
-	end
-
-	if leftShoulder then
-		leftShoulder.Enabled =
-			false
-	end
-
-	if rightShoulder then
-		rightShoulder.Enabled =
-			false
-	end
-
-	if leftHip then
-		leftHip.Enabled =
-			false
-	end
-
-	if rightHip then
-		rightHip.Enabled =
-			false
-	end
-end
-
-local function enableMotors()
-
-	if rootJoint then
-		rootJoint.Enabled =
-			true
-	end
-
-	if neck then
-		neck.Enabled =
-			true
-	end
-
-	if leftShoulder then
-		leftShoulder.Enabled =
-			true
-	end
-
-	if rightShoulder then
-		rightShoulder.Enabled =
-			true
-	end
-
-	if leftHip then
-		leftHip.Enabled =
-			true
-	end
-
-	if rightHip then
-		rightHip.Enabled =
-			true
-	end
-end
-
--- ==========================================================
--- RAGDOLL
--- ==========================================================
-
-local function ragdoll(
-	extraVelocity,
-	extraAngularVelocity
-)
-
-	if ragdolled
-		or not running
-	then
-		return
-	end
-
-	ragdolled =
-		true
-
-	doingTrick =
-		false
-
-	rememberCollisionStates()
-
-	createRagdollJoints()
-
-	disableMotors()
-
-	applyFunnyRagdollCollisions()
-
-	humanoid.AutoRotate =
-		false
-
-	humanoid.PlatformStand =
-		true
-
-	humanoid:ChangeState(
-		Enum.HumanoidStateType.Physics
-	)
-
-	-- ======================================================
-	-- ROOT ↔ TORSO LOOSE CONNECTION
-	-- ======================================================
-
-	local rootAttachment =
-		makeAttachment(
-			root,
-			CFrame.new(),
-			"RagdollRootA0"
-		)
-
-	local torsoAttachment =
-		makeAttachment(
-			torso,
-			root.CFrame:
-				ToObjectSpace(
-					torso.CFrame
-				),
-			"RagdollRootA1"
-		)
-
-	local rootSocket =
-		Instance.new(
-			"BallSocketConstraint"
-		)
-
-	rootSocket.Name =
-		"RagdollRootSocket"
-
-	rootSocket.Attachment0 =
-		rootAttachment
-
-	rootSocket.Attachment1 =
-		torsoAttachment
-
-	rootSocket.LimitsEnabled =
-		false
-
-	rootSocket.TwistLimitsEnabled =
-		false
-
-	rootSocket.Parent =
-		root
-
-	rememberRagdollObject(
-		rootSocket
-	)
-
-	-- ======================================================
-	-- PRESERVE STUNT MOMENTUM
-	-- ======================================================
-
-	if extraVelocity then
-
-		torso.AssemblyLinearVelocity =
-			extraVelocity
-	end
-
-	if extraAngularVelocity then
-
-		torso.AssemblyAngularVelocity =
-			extraAngularVelocity
-	end
-end
-
--- ==========================================================
--- UNRAGDOLL
--- ==========================================================
-
-local function unragdoll()
+local function applyRagdollFriction()
 
 	if not ragdolled then
 		return
 	end
 
-	ragdolled =
+	local backup =
+		character:FindFirstChild(
+			"RagdollBackupTorsoCollider"
+		)
+
+	if config.ZeroFriction then
+
+		torso.CustomPhysicalProperties =
+			ZERO_FRICTION_PROPERTIES
+
+		if backup then
+
+			backup.CustomPhysicalProperties =
+				ZERO_FRICTION_PROPERTIES
+		end
+
+		if not config.TorsoOnlyCollision then
+
+			for _, part in ipairs({
+
+				head,
+
+				leftArm,
+
+				rightArm,
+
+				leftLeg,
+
+				rightLeg
+
+			}) do
+
+				part.CustomPhysicalProperties =
+					ZERO_FRICTION_PROPERTIES
+			end
+		end
+
+	else
+
+		torso.CustomPhysicalProperties =
+			getOriginalProperties(
+				torso
+			)
+
+		if backup then
+
+			backup.CustomPhysicalProperties =
+				NORMAL_COLLIDER_PROPERTIES
+		end
+
+		for _, part in ipairs({
+
+			head,
+
+			leftArm,
+
+			rightArm,
+
+			leftLeg,
+
+			rightLeg
+
+		}) do
+
+			part.CustomPhysicalProperties =
+				getOriginalProperties(
+					part
+				)
+		end
+	end
+end
+
+-- ==========================================================
+-- BACKUP TORSO COLLIDER
+-- ==========================================================
+
+local function createBackupTorsoCollider()
+
+	if not config.BackupTorsoCollider then
+		return nil
+	end
+
+	if not config.TorsoOnlyCollision then
+		return nil
+	end
+
+	local collider =
+		Instance.new("Part")
+
+	collider.Name =
+		"RagdollBackupTorsoCollider"
+
+	collider.Size =
+		Vector3.new(
+			torso.Size.X * 0.88,
+			torso.Size.Y * 0.88,
+			torso.Size.Z * 0.78
+		)
+
+	collider.CFrame =
+		torso.CFrame
+
+	collider.Transparency =
+		1
+
+	collider.CastShadow =
 		false
 
+	collider.Anchored =
+		false
+
+	collider.Massless =
+		true
+
+	collider.CanCollide =
+		true
+
+	-- IMPORTANT:
+	-- Touched must be enabled for physical-contact bounce.
+	collider.CanTouch =
+		true
+
+	collider.CanQuery =
+		false
+
+	if config.ZeroFriction then
+
+		collider.CustomPhysicalProperties =
+			ZERO_FRICTION_PROPERTIES
+
+	else
+
+		collider.CustomPhysicalProperties =
+			NORMAL_COLLIDER_PROPERTIES
+	end
+
+	collider.Parent =
+		character
+
+	local weld =
+		Instance.new(
+			"WeldConstraint"
+		)
+
+	weld.Part0 =
+		torso
+
+	weld.Part1 =
+		collider
+
+	weld.Parent =
+		collider
+
+	remember(collider)
+
+	remember(weld)
+
+	return collider
+end
+
+-- ==========================================================
+-- COLLISION ENFORCEMENT
+-- ==========================================================
+
+local function enforceRagdollCollision()
+
+	if not ragdolled then
+		return
+	end
+
+	if config.TorsoOnlyCollision then
+
+		for _, object in ipairs(
+			character:GetDescendants()
+		) do
+
+			if object:IsA("BasePart") then
+
+				object.CanCollide =
+					false
+			end
+		end
+
+		-- Actual torso.
+
+		torso.CanCollide =
+			true
+
+		torso.CanTouch =
+			true
+
+		-- HRP never collides.
+
+		root.CanCollide =
+			false
+
+		-- Backup collision shell.
+
+		local backup =
+			character:FindFirstChild(
+				"RagdollBackupTorsoCollider"
+			)
+
+		if backup then
+
+			backup.CanCollide =
+				true
+
+			backup.CanTouch =
+				true
+		end
+
+	else
+
+		root.CanCollide =
+			false
+
+		for _, part in ipairs({
+
+			torso,
+
+			head,
+
+			leftArm,
+
+			rightArm,
+
+			leftLeg,
+
+			rightLeg
+
+		}) do
+
+			part.CanCollide =
+				true
+		end
+	end
+
+	applyRagdollFriction()
+end
+
+-- ==========================================================
+-- BOUNCE RAY PARAMS
+-- ==========================================================
+
+local bounceRayParams =
+	RaycastParams.new()
+
+bounceRayParams.FilterType =
+	Enum.RaycastFilterType.Exclude
+
+bounceRayParams.FilterDescendantsInstances =
+	{ character }
+
+bounceRayParams.IgnoreWater =
+	false
+
+bounceRayParams.RespectCanCollide =
+	true
+
+-- ==========================================================
+-- ESTIMATE COLLISION NORMAL
+-- ==========================================================
+--
+-- Touched gives us the object but not the normal.
+--
+-- We raycast in the PRE-COLLISION velocity direction to get
+-- the actual face normal.
+--
+-- If that misses, use a center-to-center fallback.
+--
+-- ==========================================================
+
+local function estimateCollisionNormal(
+	otherPart,
+	incomingVelocity
+)
+
+	if incomingVelocity.Magnitude
+		< 0.001
+	then
+
+		return nil
+	end
+
+	local direction =
+		incomingVelocity.Unit
+
+	local distance =
+		math.max(
+			4,
+			torso.Size.Magnitude
+		)
+
+	local origins = {
+
+		torso.Position
+			- direction * 1.5,
+
+		torso.Position
+			- direction * 0.75,
+
+		torso.Position,
+
+		torso.Position
+			+ torso.CFrame.RightVector
+				* torso.Size.X
+				* 0.35,
+
+		torso.Position
+			- torso.CFrame.RightVector
+				* torso.Size.X
+				* 0.35,
+
+		torso.Position
+			+ torso.CFrame.UpVector
+				* torso.Size.Y
+				* 0.35,
+
+		torso.Position
+			- torso.CFrame.UpVector
+				* torso.Size.Y
+				* 0.35
+	}
+
+	for _, origin in ipairs(
+		origins
+	) do
+
+		local result =
+			Workspace:Raycast(
+				origin,
+				direction * distance,
+				bounceRayParams
+			)
+
+		if result
+			and result.Instance
+			== otherPart
+		then
+
+			return result.Normal.Unit
+		end
+	end
+
+	-- ======================================================
+	-- FALLBACK NORMAL
+	-- ======================================================
+
+	local away =
+		torso.Position
+		- otherPart.Position
+
+	if away.Magnitude
+		> 0.001
+	then
+
+		return away.Unit
+	end
+
+	return -direction
+end
+
+-- ==========================================================
+-- REFLECT
+-- ==========================================================
+
+local function reflect(
+	velocity,
+	normal
+)
+
+	return velocity
+		- (
+			2
+			* velocity:Dot(normal)
+			* normal
+		)
+end
+
+-- ==========================================================
+-- RANDOM ±ANGLE REDIRECTION
+-- ==========================================================
+
+local function randomizeBounceDirection(
+	direction
+)
+
+	if direction.Magnitude
+		< 0.001
+	then
+
+		return Vector3.yAxis
+	end
+
+	direction =
+		direction.Unit
+
+	local angle =
+		config.BounceAngle
+
+	local pitch =
+		math.rad(
+			math.random(
+				-angle * 100,
+				angle * 100
+			) / 100
+		)
+
+	local yaw =
+		math.rad(
+			math.random(
+				-angle * 100,
+				angle * 100
+			) / 100
+		)
+
+	local basis =
+		CFrame.lookAt(
+			Vector3.zero,
+			direction
+		)
+
+	return (
+		basis
+		* CFrame.Angles(
+			pitch,
+			yaw,
+			0
+		)
+	).LookVector.Unit
+end
+
+-- ==========================================================
+-- PHYSICAL BOUNCE
+-- ==========================================================
+
+local function processPhysicalImpact(
+	otherPart
+)
+
+	if not running
+		or not ragdolled
+		or not config.Bounce
+	then
+
+		return
+	end
+
+	if not otherPart
+		or not otherPart:IsA("BasePart")
+	then
+
+		return
+	end
+
+	if otherPart:IsDescendantOf(
+		character
+	) then
+
+		return
+	end
+
+	if not otherPart.CanCollide then
+		return
+	end
+
+	local incoming =
+		lastPhysicsVelocity
+
+	local speed =
+		incoming.Magnitude
+
+	if speed
+		< config.BounceMinSpeed
+	then
+
+		return
+	end
+
+	local now =
+		os.clock()
+
+	-- ======================================================
+	-- COOLDOWN
+	-- ======================================================
+
+	if now - lastBounceTime
+		< config.BounceCooldown
+	then
+
+		return
+	end
+
+	-- ======================================================
+	-- FIND SURFACE NORMAL
+	-- ======================================================
+
+	local normal =
+		estimateCollisionNormal(
+			otherPart,
+			incoming
+		)
+
+	if not normal then
+		return
+	end
+
+	-- Must actually be traveling into surface.
+
+	local approach =
+		incoming:Dot(
+			normal
+		)
+
+	if approach >= -0.25 then
+		return
+	end
+
+	-- ======================================================
+	-- REFLECT
+	-- ======================================================
+
+	local reflected =
+		reflect(
+			incoming,
+			normal
+		)
+
+	if reflected.Magnitude
+		< 0.001
+	then
+
+		reflected =
+			normal
+	end
+
+	-- ======================================================
+	-- RANDOMIZE
+	-- ======================================================
+
+	local redirected =
+		randomizeBounceDirection(
+			reflected
+		)
+
+	-- ======================================================
+	-- DON'T RANDOMIZE BACK INTO SURFACE
+	-- ======================================================
+
+	if redirected:Dot(normal)
+		< 0.18
+	then
+
+		redirected =
+			redirected
+			+ normal * 0.9
+
+		if redirected.Magnitude
+			> 0.001
+		then
+
+			redirected =
+				redirected.Unit
+		else
+
+			redirected =
+				normal
+		end
+	end
+
+	local outputSpeed =
+		speed
+		* config.BouncePower
+
+	local newVelocity =
+		redirected
+		* outputSpeed
+
+	-- ======================================================
+	-- IMPORTANT:
+	--
+	-- NO CFrame CHANGES.
+	-- NO TELEPORT.
+	--
+	-- Roblox already resolved the physical collision.
+	-- We only change velocity AFTER contact.
+	-- ======================================================
+
+	task.defer(function()
+
+		if not running
+			or not ragdolled
+			or not config.Bounce
+		then
+
+			return
+		end
+
+		torso.AssemblyLinearVelocity =
+			newVelocity
+
+		root.AssemblyLinearVelocity =
+			newVelocity
+
+		torso.AssemblyAngularVelocity +=
+			Vector3.new(
+				math.random(-6, 6),
+				math.random(-6, 6),
+				math.random(-6, 6)
+			)
+	end)
+
+	lastBounceTime =
+		now
+
+	lastBouncePart =
+		otherPart
+end
+
+-- ==========================================================
+-- START BOUNCE
+-- ==========================================================
+
+local function startBounceSystem(
+	backupCollider
+)
+
+	lastBounceTime = 0
+
+	lastBouncePart = nil
+
+	lastPhysicsVelocity =
+		torso.AssemblyLinearVelocity
+
+	-- ======================================================
+	-- SAVE VELOCITY BEFORE COLLISION RESPONSE
+	-- ======================================================
+
+	velocityTracker =
+		RunService.PreSimulation:
+			Connect(function()
+
+				if not running
+					or not ragdolled
+				then
+
+					return
+				end
+
+				local current =
+					torso.AssemblyLinearVelocity
+
+				if current.Magnitude
+					> 0.1
+				then
+
+					lastPhysicsVelocity =
+						current
+				end
+			end)
+
+	trackRagdollConnection(
+		velocityTracker
+	)
+
+	-- ======================================================
+	-- REAL TORSO CONTACT
+	-- ======================================================
+
+	trackRagdollConnection(
+
+		torso.Touched:
+			Connect(
+				processPhysicalImpact
+			)
+	)
+
+	-- ======================================================
+	-- BACKUP COLLIDER CONTACT
+	-- ======================================================
+
+	if backupCollider then
+
+		trackRagdollConnection(
+
+			backupCollider.Touched:
+				Connect(
+					processPhysicalImpact
+				)
+		)
+	end
+end
+
+-- ==========================================================
+-- DESTROY RAGDOLL OBJECTS
+-- ==========================================================
+
+local function destroyRagdollObjects()
+
 	for _, object in ipairs(
-		createdRagdollObjects
+		ragdollObjects
 	) do
 
 		if object
@@ -605,80 +1347,300 @@ local function unragdoll()
 	end
 
 	table.clear(
-		createdRagdollObjects
-	)
-
-	enableMotors()
-
-	-- ======================================================
-	-- RESTORE COLLISIONS
-	-- ======================================================
-
-	for part, value in pairs(
-		originalCollision
-	) do
-
-		if part
-			and part.Parent
-		then
-
-			part.CanCollide =
-				value
-		end
-	end
-
-	originalCollision =
-		{}
-
-	root.CanCollide =
-		false
-
-	-- ======================================================
-	-- STOP SPIN
-	-- ======================================================
-
-	root.AssemblyAngularVelocity =
-		Vector3.zero
-
-	torso.AssemblyAngularVelocity =
-		Vector3.zero
-
-	-- ======================================================
-	-- RESTORE HUMANOID
-	-- ======================================================
-
-	humanoid.PlatformStand =
-		false
-
-	humanoid.AutoRotate =
-		true
-
-	local _, yaw, _ =
-		torso.CFrame:
-			ToEulerAnglesYXZ()
-
-	root.CFrame =
-		CFrame.new(
-			torso.Position
-				+ Vector3.new(
-					0,
-					2,
-					0
-				)
-		)
-		* CFrame.Angles(
-			0,
-			yaw,
-			0
-		)
-
-	humanoid:ChangeState(
-		Enum.HumanoidStateType.GettingUp
+		ragdollObjects
 	)
 end
 
 -- ==========================================================
--- TOGGLE RAGDOLL
+-- UPRIGHT RECOVERY
+-- ==========================================================
+
+local function makeRootUpright()
+
+	local look =
+		root.CFrame.LookVector
+
+	local flatLook =
+		Vector3.new(
+			look.X,
+			0,
+			look.Z
+		)
+
+	if flatLook.Magnitude
+		< 0.01
+	then
+
+		flatLook =
+			Vector3.new(
+				0,
+				0,
+				-1
+			)
+	end
+
+	flatLook =
+		flatLook.Unit
+
+	root.CFrame =
+		CFrame.lookAt(
+			torso.Position,
+			torso.Position
+				+ flatLook,
+			Vector3.yAxis
+		)
+end
+
+-- ==========================================================
+-- FORWARD DECLARATION
+-- ==========================================================
+
+local unragdoll
+
+-- ==========================================================
+-- ENTER RAGDOLL
+-- ==========================================================
+
+local function ragdoll(
+	preservedVelocity,
+	preservedAngular
+)
+
+	if not running
+		or ragdolled
+	then
+
+		return
+	end
+
+	doingTrick =
+		false
+
+	autoGetUpToken +=
+		1
+
+	local thisToken =
+		autoGetUpToken
+
+	local linearVelocity =
+		preservedVelocity
+		or root.AssemblyLinearVelocity
+
+	local angularVelocity =
+		preservedAngular
+		or root.AssemblyAngularVelocity
+
+	-- ======================================================
+	-- SAVE ORIGINAL STATE
+	-- ======================================================
+
+	saveMotorStates()
+
+	saveCollisionStates()
+
+	savePhysicalProperties()
+
+	ragdolled =
+		true
+
+	-- ======================================================
+	-- HUMANOID
+	-- ======================================================
+
+	humanoid.AutoRotate =
+		false
+
+	humanoid.PlatformStand =
+		true
+
+	humanoid:ChangeState(
+		Enum.HumanoidStateType.Physics
+	)
+
+	-- ======================================================
+	-- RAGDOLL JOINTS
+	-- ======================================================
+
+	createRagdollJoints()
+
+	disableMotors()
+
+	-- ======================================================
+	-- BACKUP COLLIDER
+	-- ======================================================
+
+	local backupCollider =
+		createBackupTorsoCollider()
+
+	-- ======================================================
+	-- COLLISION
+	-- ======================================================
+
+	enforceRagdollCollision()
+
+	if collisionEnforcer then
+
+		collisionEnforcer:
+			Disconnect()
+	end
+
+	collisionEnforcer =
+		RunService.PostSimulation:
+			Connect(function()
+
+				if running
+					and ragdolled
+				then
+
+					enforceRagdollCollision()
+				end
+			end)
+
+	-- ======================================================
+	-- PHYSICAL CONTACT BOUNCE
+	-- ======================================================
+
+	startBounceSystem(
+		backupCollider
+	)
+
+	-- ======================================================
+	-- MOMENTUM
+	-- ======================================================
+
+	if config.PreserveMomentum then
+
+		torso.AssemblyLinearVelocity =
+			linearVelocity
+
+		root.AssemblyLinearVelocity =
+			linearVelocity
+
+		torso.AssemblyAngularVelocity =
+			angularVelocity
+	end
+
+	-- ======================================================
+	-- EXTRA FLOP
+	-- ======================================================
+
+	if config.ExtraFlop then
+
+		torso.AssemblyAngularVelocity +=
+			Vector3.new(
+				math.random(-8, 8),
+				math.random(-5, 5),
+				math.random(-8, 8)
+			)
+	end
+
+	-- ======================================================
+	-- AUTO GET UP
+	-- ======================================================
+
+	if config.AutoGetUp then
+
+		task.delay(
+			config.AutoGetUpDelay,
+
+			function()
+
+				if not running
+					or not ragdolled
+				then
+
+					return
+				end
+
+				if thisToken
+					~= autoGetUpToken
+				then
+
+					return
+				end
+
+				unragdoll()
+			end
+		)
+	end
+end
+
+-- ==========================================================
+-- UNRAGDOLL
+-- ==========================================================
+
+unragdoll =
+	function()
+
+		if not ragdolled then
+			return
+		end
+
+		autoGetUpToken +=
+			1
+
+		-- ==================================================
+		-- STOP RAGDOLL CONNECTIONS FIRST
+		-- ==================================================
+
+		disconnectRagdollConnections()
+
+		velocityTracker =
+			nil
+
+		if collisionEnforcer then
+
+			collisionEnforcer:
+				Disconnect()
+
+			collisionEnforcer =
+				nil
+		end
+
+		ragdolled =
+			false
+
+		-- ==================================================
+		-- REMOVE SOCKETS / COLLIDER
+		-- ==================================================
+
+		destroyRagdollObjects()
+
+		-- ==================================================
+		-- RESTORE ORIGINAL STATES
+		-- ==================================================
+
+		restoreMotorStates()
+
+		restoreCollisionStates()
+
+		restorePhysicalProperties()
+
+		-- ==================================================
+		-- UPRIGHT
+		-- ==================================================
+
+		makeRootUpright()
+
+		root.AssemblyAngularVelocity =
+			Vector3.zero
+
+		torso.AssemblyAngularVelocity =
+			Vector3.zero
+
+		humanoid.PlatformStand =
+			false
+
+		humanoid.AutoRotate =
+			true
+
+		humanoid:ChangeState(
+			Enum.HumanoidStateType.GettingUp
+		)
+	end
+
+-- ==========================================================
+-- RAGDOLL TOGGLE
 -- ==========================================================
 
 local function toggleRagdoll()
@@ -688,20 +1650,14 @@ local function toggleRagdoll()
 	end
 
 	if ragdolled then
-
 		unragdoll()
-
 	else
-
-		ragdoll(
-			root.AssemblyLinearVelocity,
-			root.AssemblyAngularVelocity
-		)
+		ragdoll()
 	end
 end
 
 -- ==========================================================
--- FAIL CHANCE
+-- STUNTS
 -- ==========================================================
 
 local function stuntFails()
@@ -709,18 +1665,15 @@ local function stuntFails()
 	return math.random(
 		1,
 		100
-	) <= config.FailureChance
+	)
+	<= config.FailureChance
 end
-
--- ==========================================================
--- BEGIN TRICK
--- ==========================================================
 
 local function beginTrick()
 
-	if doingTrick
+	if not running
 		or ragdolled
-		or not running
+		or doingTrick
 	then
 
 		return false
@@ -742,15 +1695,11 @@ local function beginTrick()
 	return true
 end
 
--- ==========================================================
--- FINISH TRICK
--- ==========================================================
-
 local function finishTrick()
 
-	if ragdolled
+	if not running
+		or ragdolled
 		or not doingTrick
-		or not running
 	then
 
 		return
@@ -769,22 +1718,18 @@ local function finishTrick()
 		true
 
 	humanoid:ChangeState(
-		Enum.HumanoidStateType.GettingUp
+		Enum.HumanoidStateType.Running
 	)
 
 	doingTrick =
 		false
 end
 
--- ==========================================================
--- FAIL TRICK
--- ==========================================================
+local function failTrick()
 
-local function failCurrentTrick()
-
-	if not doingTrick
+	if not running
 		or ragdolled
-		or not running
+		or not doingTrick
 	then
 
 		return
@@ -806,12 +1751,11 @@ local function frontflip()
 		return
 	end
 
-	local look =
-		root.CFrame.LookVector
-
 	root:ApplyImpulse(
+
 		(
-			look * 16
+			root.CFrame.LookVector
+				* 16
 
 			+ Vector3.new(
 				0,
@@ -819,6 +1763,7 @@ local function frontflip()
 				0
 			)
 		)
+
 		* root.AssemblyMass
 	)
 
@@ -833,8 +1778,7 @@ local function frontflip()
 				28,
 				58
 			) / 100,
-
-			failCurrentTrick
+			failTrick
 		)
 
 	else
@@ -856,12 +1800,11 @@ local function backflip()
 		return
 	end
 
-	local look =
-		root.CFrame.LookVector
-
 	root:ApplyImpulse(
+
 		(
-			-look * 8
+			-root.CFrame.LookVector
+				* 8
 
 			+ Vector3.new(
 				0,
@@ -869,6 +1812,7 @@ local function backflip()
 				0
 			)
 		)
+
 		* root.AssemblyMass
 	)
 
@@ -883,8 +1827,7 @@ local function backflip()
 				28,
 				58
 			) / 100,
-
-			failCurrentTrick
+			failTrick
 		)
 
 	else
@@ -906,12 +1849,10 @@ local function dive()
 		return
 	end
 
-	local look =
-		root.CFrame.LookVector
-
 	root:ApplyImpulse(
+
 		(
-			look
+			root.CFrame.LookVector
 				* config.DiveForwardPower
 
 			+ Vector3.new(
@@ -920,6 +1861,7 @@ local function dive()
 				0
 			)
 		)
+
 		* root.AssemblyMass
 	)
 
@@ -931,7 +1873,7 @@ local function dive()
 
 		task.delay(
 			0.35,
-			failCurrentTrick
+			failTrick
 		)
 
 	else
@@ -944,7 +1886,7 @@ local function dive()
 end
 
 -- ==========================================================
--- SPIN JUMP
+-- SPIN
 -- ==========================================================
 
 local function spinJump()
@@ -954,11 +1896,13 @@ local function spinJump()
 	end
 
 	root:ApplyImpulse(
+
 		Vector3.new(
 			0,
 			config.SpinPower,
 			0
 		)
+
 		* root.AssemblyMass
 	)
 
@@ -973,20 +1917,7 @@ local function spinJump()
 
 		task.delay(
 			0.45,
-			function()
-
-				if doingTrick
-					and not ragdolled
-					and running
-				then
-
-					root.AssemblyAngularVelocity +=
-						root.CFrame.LookVector
-						* 8
-
-					failCurrentTrick()
-				end
-			end
+			failTrick
 		)
 
 	else
@@ -998,20 +1929,26 @@ local function spinJump()
 	end
 end
 
--- ==========================================================
--- ACTION TABLE
--- ==========================================================
-
 local actions = {
-	Ragdoll = toggleRagdoll,
-	Frontflip = frontflip,
-	Backflip = backflip,
-	Dive = dive,
-	Spin = spinJump
+
+	Ragdoll =
+		toggleRagdoll,
+
+	Frontflip =
+		frontflip,
+
+	Backflip =
+		backflip,
+
+	Dive =
+		dive,
+
+	Spin =
+		spinJump
 }
 
 -- ==========================================================
--- OLD GUI CLEANUP
+-- REMOVE OLD GUI
 -- ==========================================================
 
 local oldGui =
@@ -1045,24 +1982,24 @@ local frame =
 frame.Size =
 	UDim2.new(
 		0,
-		270,
+		330,
 		0,
-		430
+		500
 	)
 
 frame.Position =
 	UDim2.new(
 		1,
-		-290,
-		0.2,
+		-350,
+		0.15,
 		0
 	)
 
 frame.BackgroundColor3 =
 	Color3.fromRGB(
-		24,
-		24,
-		29
+		23,
+		23,
+		28
 	)
 
 frame.BorderSizePixel =
@@ -1077,13 +2014,13 @@ frame.Draggable =
 frame.Parent =
 	gui
 
-local corner =
+local frameCorner =
 	Instance.new(
 		"UICorner",
 		frame
 	)
 
-corner.CornerRadius =
+frameCorner.CornerRadius =
 	UDim.new(
 		0,
 		9
@@ -1101,14 +2038,14 @@ title.Size =
 		1,
 		0,
 		0,
-		38
+		40
 	)
 
 title.BackgroundColor3 =
 	Color3.fromRGB(
-		35,
-		35,
-		42
+		34,
+		34,
+		41
 	)
 
 title.BorderSizePixel =
@@ -1118,272 +2055,240 @@ title.Text =
 	"R6 STUNT / RAGDOLL LAB"
 
 title.TextColor3 =
-	Color3.fromRGB(
-		255,
-		255,
-		255
+	Color3.new(
+		1,
+		1,
+		1
 	)
 
 title.Font =
 	Enum.Font.SourceSansBold
 
 title.TextSize =
-	15
+	16
 
 title.Parent =
 	frame
 
 -- ==========================================================
--- DESCRIPTION
+-- TABS
 -- ==========================================================
 
-local info =
-	Instance.new("TextLabel")
-
-info.Size =
-	UDim2.new(
-		1,
-		-16,
-		0,
-		42
-	)
-
-info.Position =
-	UDim2.new(
-		0,
-		8,
-		0,
-		42
-	)
-
-info.BackgroundTransparency =
-	1
-
-info.Text =
-	"Torso-only collision ragdoll 😭\n"
-	.. "Click a bind, then press a new key."
-
-info.TextWrapped =
-	true
-
-info.TextColor3 =
-	Color3.fromRGB(
-		180,
-		180,
-		190
-	)
-
-info.Font =
-	Enum.Font.SourceSans
-
-info.TextSize =
-	12
-
-info.Parent =
-	frame
-
--- ==========================================================
--- FAILURE LABEL
--- ==========================================================
-
-local failureLabel =
-	Instance.new("TextLabel")
-
-failureLabel.Size =
-	UDim2.new(
-		1,
-		-20,
-		0,
-		24
-	)
-
-failureLabel.Position =
-	UDim2.new(
-		0,
-		10,
-		0,
-		85
-	)
-
-failureLabel.BackgroundTransparency =
-	1
-
-failureLabel.TextColor3 =
-	Color3.fromRGB(
-		255,
-		195,
-		90
-	)
-
-failureLabel.Font =
-	Enum.Font.SourceSansBold
-
-failureLabel.TextSize =
-	13
-
-failureLabel.Parent =
-	frame
-
-local function updateFailureText()
-
-	failureLabel.Text =
-		"Stunt Failure Chance: "
-		.. tostring(
-			config.FailureChance
-		)
-		.. "%"
-end
-
-updateFailureText()
-
--- ==========================================================
--- FAILURE BUTTONS
--- ==========================================================
-
-local failMinus =
+local stuntsTab =
 	Instance.new("TextButton")
 
-failMinus.Size =
+stuntsTab.Size =
 	UDim2.new(
+		0.5,
+		-6,
 		0,
-		55,
-		0,
-		30
+		34
 	)
 
-failMinus.Position =
+stuntsTab.Position =
 	UDim2.new(
 		0,
-		10,
+		4,
 		0,
-		112
+		45
 	)
 
-failMinus.BackgroundColor3 =
+stuntsTab.BackgroundColor3 =
 	Color3.fromRGB(
-		65,
-		65,
-		72
+		55,
+		85,
+		135
 	)
 
-failMinus.BorderSizePixel =
+stuntsTab.BorderSizePixel =
 	0
 
-failMinus.Text =
-	"-10%"
+stuntsTab.Text =
+	"STUNTS"
 
-failMinus.TextColor3 =
-	Color3.new(
-		1,
-		1,
-		1
-	)
+stuntsTab.TextColor3 =
+	Color3.new(1, 1, 1)
 
-failMinus.Font =
+stuntsTab.Font =
 	Enum.Font.SourceSansBold
 
-failMinus.TextSize =
+stuntsTab.TextSize =
 	13
 
-failMinus.Parent =
+stuntsTab.Parent =
 	frame
 
-local failPlus =
+local settingsTab =
 	Instance.new("TextButton")
 
-failPlus.Size =
+settingsTab.Size =
 	UDim2.new(
+		0.5,
+		-6,
 		0,
-		55,
-		0,
-		30
+		34
 	)
 
-failPlus.Position =
+settingsTab.Position =
 	UDim2.new(
-		1,
-		-65,
+		0.5,
+		2,
 		0,
-		112
+		45
 	)
 
-failPlus.BackgroundColor3 =
+settingsTab.BackgroundColor3 =
 	Color3.fromRGB(
-		65,
-		65,
-		72
+		45,
+		45,
+		52
 	)
 
-failPlus.BorderSizePixel =
+settingsTab.BorderSizePixel =
 	0
 
-failPlus.Text =
-	"+10%"
+settingsTab.Text =
+	"SETTINGS"
 
-failPlus.TextColor3 =
-	Color3.new(
-		1,
-		1,
-		1
-	)
+settingsTab.TextColor3 =
+	Color3.new(1, 1, 1)
 
-failPlus.Font =
+settingsTab.Font =
 	Enum.Font.SourceSansBold
 
-failPlus.TextSize =
+settingsTab.TextSize =
 	13
 
-failPlus.Parent =
+settingsTab.Parent =
 	frame
 
-failMinus.MouseButton1Click:
+-- ==========================================================
+-- PAGES
+-- ==========================================================
+
+local stuntsPage =
+	Instance.new("Frame")
+
+stuntsPage.Size =
+	UDim2.new(
+		1,
+		-12,
+		1,
+		-90
+	)
+
+stuntsPage.Position =
+	UDim2.new(
+		0,
+		6,
+		0,
+		84
+	)
+
+stuntsPage.BackgroundTransparency =
+	1
+
+stuntsPage.Parent =
+	frame
+
+local settingsPage =
+	Instance.new(
+		"ScrollingFrame"
+	)
+
+settingsPage.Size =
+	stuntsPage.Size
+
+settingsPage.Position =
+	stuntsPage.Position
+
+settingsPage.BackgroundTransparency =
+	1
+
+settingsPage.BorderSizePixel =
+	0
+
+settingsPage.ScrollBarThickness =
+	5
+
+settingsPage.Visible =
+	false
+
+settingsPage.Parent =
+	frame
+
+-- ==========================================================
+-- TAB SWITCH
+-- ==========================================================
+
+stuntsTab.MouseButton1Click:
 	Connect(function()
 
-		config.FailureChance =
-			math.clamp(
-				config.FailureChance - 10,
-				0,
-				100
+		stuntsPage.Visible =
+			true
+
+		settingsPage.Visible =
+			false
+
+		stuntsTab.BackgroundColor3 =
+			Color3.fromRGB(
+				55,
+				85,
+				135
 			)
 
-		updateFailureText()
+		settingsTab.BackgroundColor3 =
+			Color3.fromRGB(
+				45,
+				45,
+				52
+			)
 	end)
 
-failPlus.MouseButton1Click:
+settingsTab.MouseButton1Click:
 	Connect(function()
 
-		config.FailureChance =
-			math.clamp(
-				config.FailureChance + 10,
-				0,
-				100
+		stuntsPage.Visible =
+			false
+
+		settingsPage.Visible =
+			true
+
+		stuntsTab.BackgroundColor3 =
+			Color3.fromRGB(
+				45,
+				45,
+				52
 			)
 
-		updateFailureText()
+		settingsTab.BackgroundColor3 =
+			Color3.fromRGB(
+				55,
+				85,
+				135
+			)
 	end)
 
 -- ==========================================================
--- BIND BUTTON CREATOR
+-- BUTTON HELPER
 -- ==========================================================
 
-local refreshFunctions = {}
-
-local function createBindButton(
-	actionName,
-	y
+local function makeButton(
+	parent,
+	text,
+	y,
+	height
 )
 
 	local button =
-		Instance.new(
-			"TextButton"
-		)
+		Instance.new("TextButton")
 
 	button.Size =
 		UDim2.new(
 			1,
 			-20,
 			0,
-			36
+			height or 38
 		)
 
 	button.Position =
@@ -1396,20 +2301,19 @@ local function createBindButton(
 
 	button.BackgroundColor3 =
 		Color3.fromRGB(
-			48,
-			48,
-			56
+			47,
+			47,
+			55
 		)
 
 	button.BorderSizePixel =
 		0
 
+	button.Text =
+		text
+
 	button.TextColor3 =
-		Color3.fromRGB(
-			235,
-			235,
-			235
-		)
+		Color3.new(1, 1, 1)
 
 	button.Font =
 		Enum.Font.SourceSansBold
@@ -1418,40 +2322,183 @@ local function createBindButton(
 		13
 
 	button.Parent =
-		frame
+		parent
 
-	local buttonCorner =
+	local corner =
 		Instance.new(
 			"UICorner",
 			button
 		)
 
-	buttonCorner.CornerRadius =
+	corner.CornerRadius =
 		UDim.new(
 			0,
-			5
+			6
 		)
 
-	bindButtons[actionName] =
-		button
+	return button
+end
+
+-- ==========================================================
+-- FAILURE CHANCE
+-- ==========================================================
+
+local failureLabel =
+	Instance.new("TextLabel")
+
+failureLabel.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		28
+	)
+
+failureLabel.Position =
+	UDim2.new(
+		0,
+		10,
+		0,
+		5
+	)
+
+failureLabel.BackgroundTransparency =
+	1
+
+failureLabel.TextColor3 =
+	Color3.fromRGB(
+		255,
+		200,
+		100
+	)
+
+failureLabel.Font =
+	Enum.Font.SourceSansBold
+
+failureLabel.TextSize =
+	13
+
+failureLabel.Parent =
+	stuntsPage
+
+local function refreshFailure()
+
+	failureLabel.Text =
+		"Stunt Failure Chance: "
+		.. tostring(
+			config.FailureChance
+		)
+		.. "%"
+end
+
+refreshFailure()
+
+local failureMinus =
+	makeButton(
+		stuntsPage,
+		"-10%",
+		36,
+		30
+	)
+
+failureMinus.Size =
+	UDim2.new(
+		0,
+		65,
+		0,
+		30
+	)
+
+local failurePlus =
+	makeButton(
+		stuntsPage,
+		"+10%",
+		36,
+		30
+	)
+
+failurePlus.Size =
+	UDim2.new(
+		0,
+		65,
+		0,
+		30
+	)
+
+failurePlus.Position =
+	UDim2.new(
+		1,
+		-75,
+		0,
+		36
+	)
+
+failureMinus.MouseButton1Click:
+	Connect(function()
+
+		config.FailureChance =
+			math.clamp(
+				config.FailureChance - 10,
+				0,
+				100
+			)
+
+		refreshFailure()
+	end)
+
+failurePlus.MouseButton1Click:
+	Connect(function()
+
+		config.FailureChance =
+			math.clamp(
+				config.FailureChance + 10,
+				0,
+				100
+			)
+
+		refreshFailure()
+	end)
+
+-- ==========================================================
+-- BINDS
+-- ==========================================================
+
+local function createBindButton(
+	actionName,
+	y
+)
+
+	local button =
+		makeButton(
+			stuntsPage,
+			"",
+			y,
+			38
+		)
 
 	local function refresh()
 
 		button.Text =
 			actionName
-			.. ": ["
-			.. binds[
-				actionName
-			].Name
+			.. " ["
+			.. binds[actionName].Name
 			.. "]"
+
+		button.BackgroundColor3 =
+			Color3.fromRGB(
+				47,
+				47,
+				55
+			)
 	end
 
-	refresh()
+	bindButtons[actionName] =
+		button
 
-	refreshFunctions[
-		actionName
-	] =
+	bindRefreshers[actionName] =
 		refresh
+
+	refresh()
 
 	button.MouseButton1Click:
 		Connect(function()
@@ -1461,157 +2508,706 @@ local function createBindButton(
 
 			button.Text =
 				actionName
-				.. ": PRESS A KEY..."
+				.. " [PRESS KEY]"
 
 			button.BackgroundColor3 =
 				Color3.fromRGB(
-					0,
-					120,
-					190
+					45,
+					105,
+					165
 				)
 		end)
 end
 
--- ==========================================================
--- BIND BUTTONS
--- ==========================================================
-
 createBindButton(
 	"Ragdoll",
-	150
+	80
 )
 
 createBindButton(
 	"Frontflip",
-	190
+	124
 )
 
 createBindButton(
 	"Backflip",
-	230
+	168
 )
 
 createBindButton(
 	"Dive",
-	270
+	212
 )
 
 createBindButton(
 	"Spin",
-	310
+	256
 )
+
+local ragdollButton =
+	makeButton(
+		stuntsPage,
+		"TOGGLE RAGDOLL",
+		308,
+		40
+	)
+
+ragdollButton.MouseButton1Click:
+	Connect(
+		toggleRagdoll
+	)
+
+-- ==========================================================
+-- SETTINGS HELPERS
+-- ==========================================================
+
+local settingY = 5
+
+local function createSection(text)
+
+	local label =
+		Instance.new("TextLabel")
+
+	label.Size =
+		UDim2.new(
+			1,
+			-16,
+			0,
+			28
+		)
+
+	label.Position =
+		UDim2.new(
+			0,
+			8,
+			0,
+			settingY
+		)
+
+	label.BackgroundTransparency =
+		1
+
+	label.Text =
+		text
+
+	label.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	label.TextColor3 =
+		Color3.fromRGB(
+			205,
+			205,
+			215
+		)
+
+	label.Font =
+		Enum.Font.SourceSansBold
+
+	label.TextSize =
+		14
+
+	label.Parent =
+		settingsPage
+
+	settingY += 30
+end
+
+local function createToggle(
+	displayName,
+	configKey,
+	description,
+	callback
+)
+
+	local holder =
+		Instance.new("Frame")
+
+	holder.Size =
+		UDim2.new(
+			1,
+			-12,
+			0,
+			58
+		)
+
+	holder.Position =
+		UDim2.new(
+			0,
+			6,
+			0,
+			settingY
+		)
+
+	holder.BackgroundColor3 =
+		Color3.fromRGB(
+			39,
+			39,
+			46
+		)
+
+	holder.BorderSizePixel =
+		0
+
+	holder.Parent =
+		settingsPage
+
+	local holderCorner =
+		Instance.new(
+			"UICorner",
+			holder
+		)
+
+	holderCorner.CornerRadius =
+		UDim.new(
+			0,
+			6
+		)
+
+	local nameLabel =
+		Instance.new("TextLabel")
+
+	nameLabel.Size =
+		UDim2.new(
+			1,
+			-98,
+			0,
+			24
+		)
+
+	nameLabel.Position =
+		UDim2.new(
+			0,
+			9,
+			0,
+			4
+		)
+
+	nameLabel.BackgroundTransparency =
+		1
+
+	nameLabel.Text =
+		displayName
+
+	nameLabel.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	nameLabel.TextColor3 =
+		Color3.new(1, 1, 1)
+
+	nameLabel.Font =
+		Enum.Font.SourceSansBold
+
+	nameLabel.TextSize =
+		13
+
+	nameLabel.Parent =
+		holder
+
+	local descriptionLabel =
+		Instance.new("TextLabel")
+
+	descriptionLabel.Size =
+		UDim2.new(
+			1,
+			-103,
+			0,
+			25
+		)
+
+	descriptionLabel.Position =
+		UDim2.new(
+			0,
+			9,
+			0,
+			28
+		)
+
+	descriptionLabel.BackgroundTransparency =
+		1
+
+	descriptionLabel.Text =
+		description
+
+	descriptionLabel.TextWrapped =
+		true
+
+	descriptionLabel.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	descriptionLabel.TextColor3 =
+		Color3.fromRGB(
+			160,
+			160,
+			170
+		)
+
+	descriptionLabel.Font =
+		Enum.Font.SourceSans
+
+	descriptionLabel.TextSize =
+		10
+
+	descriptionLabel.Parent =
+		holder
+
+	local toggle =
+		Instance.new("TextButton")
+
+	toggle.Size =
+		UDim2.new(
+			0,
+			70,
+			0,
+			32
+		)
+
+	toggle.Position =
+		UDim2.new(
+			1,
+			-79,
+			0.5,
+			-16
+		)
+
+	toggle.BorderSizePixel =
+		0
+
+	toggle.TextColor3 =
+		Color3.new(1, 1, 1)
+
+	toggle.Font =
+		Enum.Font.SourceSansBold
+
+	toggle.TextSize =
+		12
+
+	toggle.Parent =
+		holder
+
+	local toggleCorner =
+		Instance.new(
+			"UICorner",
+			toggle
+		)
+
+	toggleCorner.CornerRadius =
+		UDim.new(
+			0,
+			6
+		)
+
+	local function refresh()
+
+		if config[configKey] then
+
+			toggle.Text =
+				"ON"
+
+			toggle.BackgroundColor3 =
+				Color3.fromRGB(
+					50,
+					125,
+					75
+				)
+
+		else
+
+			toggle.Text =
+				"OFF"
+
+			toggle.BackgroundColor3 =
+				Color3.fromRGB(
+					125,
+					50,
+					50
+				)
+		end
+	end
+
+	refresh()
+
+	toggle.MouseButton1Click:
+		Connect(function()
+
+			config[configKey] =
+				not config[configKey]
+
+			refresh()
+
+			if callback then
+
+				callback(
+					config[configKey]
+				)
+			end
+		end)
+
+	settingY += 64
+end
+
+-- ==========================================================
+-- SETTINGS
+-- ==========================================================
+
+createSection(
+	"RAGDOLL PHYSICS"
+)
+
+createToggle(
+	"Boneless",
+	"Boneless",
+	"Completely unrestricted ragdoll joints."
+)
+
+createToggle(
+	"Torso-Only Collision",
+	"TorsoOnlyCollision",
+	"Only torso + optional backup shell collide."
+)
+
+createToggle(
+	"Backup Torso Collider",
+	"BackupTorsoCollider",
+	"Hidden physical shell for reliable torso collision."
+)
+
+createToggle(
+	"Preserve Momentum",
+	"PreserveMomentum",
+	"Keep velocity when entering ragdoll."
+)
+
+createToggle(
+	"Extra Flop",
+	"ExtraFlop",
+	"Adds random tumble when ragdoll starts."
+)
+
+createToggle(
+	"Zero Friction",
+	"ZeroFriction",
+	"Human sled mode. OFF restores normal friction.",
+
+	function()
+
+		if ragdolled then
+			applyRagdollFriction()
+		end
+	end
+)
+
+createToggle(
+	"Random Bounce",
+	"Bounce",
+	"Redirects velocity after real physical contact."
+)
+
+createToggle(
+	"Auto Get Up",
+	"AutoGetUp",
+	"Automatically exits ragdoll after a delay."
+)
+
+-- ==========================================================
+-- BOUNCE SETTINGS
+-- ==========================================================
+
+createSection(
+	"BOUNCE"
+)
+
+local bouncePowerButton =
+	makeButton(
+		settingsPage,
+		"",
+		settingY,
+		42
+	)
+
+local function refreshBouncePower()
+
+	bouncePowerButton.Text =
+		"Bounce Speed: "
+		.. string.format(
+			"%.2fx",
+			config.BouncePower
+		)
+		.. "  [CLICK]"
+end
+
+refreshBouncePower()
+
+bouncePowerButton.MouseButton1Click:
+	Connect(function()
+
+		config.BouncePower +=
+			0.25
+
+		if config.BouncePower
+			> 2
+		then
+
+			config.BouncePower =
+				0.5
+		end
+
+		refreshBouncePower()
+	end)
+
+settingY += 48
+
+local bounceAngleButton =
+	makeButton(
+		settingsPage,
+		"",
+		settingY,
+		42
+	)
+
+local function refreshBounceAngle()
+
+	bounceAngleButton.Text =
+		"Random Angle: ±"
+		.. tostring(
+			config.BounceAngle
+		)
+		.. "°  [CLICK]"
+end
+
+refreshBounceAngle()
+
+bounceAngleButton.MouseButton1Click:
+	Connect(function()
+
+		config.BounceAngle +=
+			15
+
+		if config.BounceAngle
+			> 90
+		then
+
+			config.BounceAngle =
+				15
+		end
+
+		refreshBounceAngle()
+	end)
+
+settingY += 48
+
+local minSpeedButton =
+	makeButton(
+		settingsPage,
+		"",
+		settingY,
+		42
+	)
+
+local function refreshMinSpeed()
+
+	minSpeedButton.Text =
+		"Minimum Bounce Speed: "
+		.. tostring(
+			config.BounceMinSpeed
+		)
+end
+
+refreshMinSpeed()
+
+minSpeedButton.MouseButton1Click:
+	Connect(function()
+
+		config.BounceMinSpeed -= 1
+
+		if config.BounceMinSpeed
+			< 2
+		then
+
+			config.BounceMinSpeed =
+				10
+		end
+
+		refreshMinSpeed()
+	end)
+
+settingY += 48
+
+-- ==========================================================
+-- AUTO GET UP DELAY
+-- ==========================================================
+
+local delayButton =
+	makeButton(
+		settingsPage,
+		"",
+		settingY,
+		42
+	)
+
+local function refreshDelay()
+
+	delayButton.Text =
+		"Auto Get-Up Delay: "
+		.. tostring(
+			config.AutoGetUpDelay
+		)
+		.. "s"
+end
+
+refreshDelay()
+
+delayButton.MouseButton1Click:
+	Connect(function()
+
+		config.AutoGetUpDelay += 1
+
+		if config.AutoGetUpDelay
+			> 10
+		then
+
+			config.AutoGetUpDelay =
+				1
+		end
+
+		refreshDelay()
+	end)
+
+settingY += 50
+
+-- ==========================================================
+-- INFO
+-- ==========================================================
+
+local info =
+	Instance.new("TextLabel")
+
+info.Size =
+	UDim2.new(
+		1,
+		-16,
+		0,
+		88
+	)
+
+info.Position =
+	UDim2.new(
+		0,
+		8,
+		0,
+		settingY
+	)
+
+info.BackgroundColor3 =
+	Color3.fromRGB(
+		34,
+		34,
+		40
+	)
+
+info.BorderSizePixel =
+	0
+
+info.Text =
+	"PHYSICAL BOUNCE 💥\n"
+	.. "Roblox handles the solid collision first.\n"
+	.. "Touched then redirects your incoming velocity.\n"
+	.. "No CFrame movement = no bounce-induced noclip."
+
+info.TextWrapped =
+	true
+
+info.TextColor3 =
+	Color3.fromRGB(
+		220,
+		220,
+		225
+	)
+
+info.Font =
+	Enum.Font.SourceSans
+
+info.TextSize =
+	11
+
+info.Parent =
+	settingsPage
+
+settingY += 96
+
+settingsPage.CanvasSize =
+	UDim2.new(
+		0,
+		0,
+		0,
+		settingY + 10
+	)
 
 -- ==========================================================
 -- KILL SCRIPT
 -- ==========================================================
 
 local killButton =
-	Instance.new("TextButton")
-
-killButton.Size =
-	UDim2.new(
-		1,
-		-20,
-		0,
-		42
-	)
-
-killButton.Position =
-	UDim2.new(
-		0,
-		10,
-		1,
-		-52
+	makeButton(
+		stuntsPage,
+		"KILL SCRIPT",
+		362,
+		40
 	)
 
 killButton.BackgroundColor3 =
 	Color3.fromRGB(
-		175,
-		38,
-		38
+		170,
+		40,
+		40
 	)
 
-killButton.BorderSizePixel =
-	0
-
-killButton.Text =
-	"KILL SCRIPT"
-
-killButton.TextColor3 =
-	Color3.fromRGB(
-		255,
-		255,
-		255
-	)
-
-killButton.Font =
-	Enum.Font.SourceSansBold
-
-killButton.TextSize =
-	14
-
-killButton.Parent =
-	frame
-
 -- ==========================================================
--- KEY INPUT
+-- INPUT
 -- ==========================================================
 
-trackConnection(
+track(
 	UserInputService.InputBegan:
 		Connect(function(
 			input,
-			gameProcessed
+			processed
 		)
 
-			if not running
-				or gameProcessed
+			if processed
+				or not running
 			then
+
 				return
 			end
 
 			if input.UserInputType
 				~= Enum.UserInputType.Keyboard
 			then
+
 				return
 			end
 
-			-- ==============================================
-			-- REBIND
-			-- ==============================================
-
 			if awaitingBind then
 
-				local action =
+				local actionName =
 					awaitingBind
 
-				binds[action] =
+				binds[actionName] =
 					input.KeyCode
 
 				awaitingBind =
 					nil
 
-				if bindButtons[action] then
+				if bindRefreshers[
+					actionName
+				] then
 
-					bindButtons[action].
-						BackgroundColor3 =
-						Color3.fromRGB(
-							48,
-							48,
-							56
-						)
-				end
-
-				if refreshFunctions[action] then
-					refreshFunctions[action]()
+					bindRefreshers[
+						actionName
+					]()
 				end
 
 				return
 			end
-
-			-- ==============================================
-			-- ACTIONS
-			-- ==============================================
 
 			for actionName,
 				keyCode in pairs(
@@ -1639,7 +3235,7 @@ trackConnection(
 )
 
 -- ==========================================================
--- CLEANUP / KILL SCRIPT
+-- CLEANUP
 -- ==========================================================
 
 local function cleanup()
@@ -1648,68 +3244,44 @@ local function cleanup()
 		return
 	end
 
-	running =
-		false
+	running = false
 
-	awaitingBind =
-		nil
+	autoGetUpToken += 1
 
-	doingTrick =
-		false
+	doingTrick = false
 
-	ragdolled =
-		false
+	awaitingBind = nil
 
-	-- Remove constraints.
-	for _, object in ipairs(
-		createdRagdollObjects
-	) do
+	disconnectRagdollConnections()
 
-		if object
-			and object.Parent
-		then
+	if collisionEnforcer then
 
-			pcall(function()
-				object:Destroy()
-			end)
-		end
+		collisionEnforcer:
+			Disconnect()
+
+		collisionEnforcer = nil
 	end
 
-	table.clear(
-		createdRagdollObjects
+	destroyRagdollObjects()
+
+	restoreMotorStates()
+
+	restoreCollisionStates()
+
+	restorePhysicalProperties()
+
+	ragdolled = false
+
+	pcall(
+		makeRootUpright
 	)
 
-	-- Restore motors.
-	enableMotors()
-
-	-- Restore collisions.
-	for part, value in pairs(
-		originalCollision
-	) do
-
-		if part
-			and part.Parent
-		then
-
-			part.CanCollide =
-				value
-		end
-	end
-
-	originalCollision =
-		{}
-
-	root.CanCollide =
-		false
-
-	-- Stop physics.
 	root.AssemblyAngularVelocity =
 		Vector3.zero
 
 	torso.AssemblyAngularVelocity =
 		Vector3.zero
 
-	-- Restore Humanoid.
 	humanoid.PlatformStand =
 		false
 
@@ -1724,7 +3296,6 @@ local function cleanup()
 
 	end)
 
-	-- Disconnect events.
 	for _, connection in ipairs(
 		connections
 	) do
@@ -1742,11 +3313,10 @@ local function cleanup()
 		gui:Destroy()
 	end
 
-	_G.R6StuntCleanup =
-		nil
+	_G.R6StuntCleanup = nil
 
 	print(
-		"R6 Stunt Lab killed."
+		"R6 Stunt / Ragdoll Lab killed."
 	)
 end
 
@@ -1762,12 +3332,16 @@ killButton.MouseButton1Click:
 -- START
 -- ==========================================================
 
-print("======================================")
+print("========================================")
 print("R6 STUNT / RAGDOLL LAB")
-print("TORSO-ONLY COLLISION MODE")
+print("PHYSICAL CONTACT BOUNCE")
+print("========================================")
 print("R = Ragdoll")
 print("F = Frontflip")
 print("G = Backflip")
 print("T = Dive")
 print("Y = Spin")
-print("======================================")
+print("")
+print("Bounce no longer changes CFrame.")
+print("Real collision happens before ricochet.")
+print("========================================")
