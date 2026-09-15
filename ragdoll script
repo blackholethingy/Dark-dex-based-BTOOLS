@@ -1,0 +1,1773 @@
+-- ==========================================================
+-- R6 STUNT + RAGDOLL PLAYGROUND
+-- TORSO-ONLY COLLISION VERSION
+-- ==========================================================
+--
+-- DEFAULT BINDS:
+--
+-- R = Ragdoll
+-- F = Frontflip
+-- G = Backflip
+-- T = Dive
+-- Y = Spin Jump
+--
+-- RAGDOLL COLLISION:
+-- Torso = ON
+-- Everything else = OFF
+--
+-- ==========================================================
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local character =
+	player.Character
+	or player.CharacterAdded:Wait()
+
+local humanoid =
+	character:WaitForChild("Humanoid")
+
+local root =
+	character:WaitForChild("HumanoidRootPart")
+
+local torso =
+	character:WaitForChild("Torso")
+
+local head =
+	character:WaitForChild("Head")
+
+local leftArm =
+	character:WaitForChild("Left Arm")
+
+local rightArm =
+	character:WaitForChild("Right Arm")
+
+local leftLeg =
+	character:WaitForChild("Left Leg")
+
+local rightLeg =
+	character:WaitForChild("Right Leg")
+
+humanoid.RequiresNeck = false
+
+-- ==========================================================
+-- CLEAN OLD VERSION
+-- ==========================================================
+
+if _G.R6StuntCleanup then
+	pcall(_G.R6StuntCleanup)
+end
+
+-- ==========================================================
+-- CONFIG
+-- ==========================================================
+
+local config = {
+	FailureChance = 30,
+
+	FrontflipPower = 52,
+	BackflipPower = 52,
+
+	DiveForwardPower = 58,
+	DiveUpPower = 18,
+
+	SpinPower = 48,
+
+	FlipAngularSpeed = 12,
+	SpinAngularSpeed = 14
+}
+
+-- ==========================================================
+-- BINDS
+-- ==========================================================
+
+local binds = {
+	Ragdoll = Enum.KeyCode.R,
+	Frontflip = Enum.KeyCode.F,
+	Backflip = Enum.KeyCode.G,
+	Dive = Enum.KeyCode.T,
+	Spin = Enum.KeyCode.Y
+}
+
+local actionOrder = {
+	"Ragdoll",
+	"Frontflip",
+	"Backflip",
+	"Dive",
+	"Spin"
+}
+
+-- ==========================================================
+-- STATE
+-- ==========================================================
+
+local running = true
+
+local ragdolled = false
+local doingTrick = false
+
+local awaitingBind = nil
+
+local connections = {}
+
+local createdRagdollObjects = {}
+local originalCollision = {}
+
+local bindButtons = {}
+
+-- ==========================================================
+-- CONNECTION TRACKER
+-- ==========================================================
+
+local function trackConnection(connection)
+	table.insert(
+		connections,
+		connection
+	)
+
+	return connection
+end
+
+-- ==========================================================
+-- MOTOR LOOKUP
+-- ==========================================================
+
+local function findMotor(name)
+
+	for _, object in ipairs(
+		character:GetDescendants()
+	) do
+
+		if object:IsA("Motor6D")
+			and object.Name == name
+		then
+
+			return object
+		end
+	end
+
+	return nil
+end
+
+local rootJoint =
+	findMotor("RootJoint")
+
+local neck =
+	findMotor("Neck")
+
+local leftShoulder =
+	findMotor("Left Shoulder")
+
+local rightShoulder =
+	findMotor("Right Shoulder")
+
+local leftHip =
+	findMotor("Left Hip")
+
+local rightHip =
+	findMotor("Right Hip")
+
+-- ==========================================================
+-- RAGDOLL OBJECT TRACKER
+-- ==========================================================
+
+local function rememberRagdollObject(object)
+
+	table.insert(
+		createdRagdollObjects,
+		object
+	)
+
+	return object
+end
+
+-- ==========================================================
+-- ATTACHMENTS
+-- ==========================================================
+
+local function makeAttachment(
+	part,
+	cframe,
+	name
+)
+
+	local attachment =
+		Instance.new("Attachment")
+
+	attachment.Name =
+		name
+
+	attachment.CFrame =
+		cframe
+
+	attachment.Parent =
+		part
+
+	return rememberRagdollObject(
+		attachment
+	)
+end
+
+-- ==========================================================
+-- SOCKETS
+-- ==========================================================
+
+local function makeBallSocket(
+	motor,
+	name,
+	upperAngle,
+	twistLower,
+	twistUpper
+)
+
+	if not motor then
+		return
+	end
+
+	local part0 =
+		motor.Part0
+
+	local part1 =
+		motor.Part1
+
+	if not part0
+		or not part1
+	then
+		return
+	end
+
+	local attachment0 =
+		makeAttachment(
+			part0,
+			motor.C0,
+			name .. "_A0"
+		)
+
+	local attachment1 =
+		makeAttachment(
+			part1,
+			motor.C1,
+			name .. "_A1"
+		)
+
+	local socket =
+		Instance.new(
+			"BallSocketConstraint"
+		)
+
+	socket.Name =
+		name
+
+	socket.Attachment0 =
+		attachment0
+
+	socket.Attachment1 =
+		attachment1
+
+	socket.LimitsEnabled =
+		true
+
+	socket.UpperAngle =
+		upperAngle
+
+	socket.TwistLimitsEnabled =
+		true
+
+	socket.TwistLowerAngle =
+		twistLower
+
+	socket.TwistUpperAngle =
+		twistUpper
+
+	socket.Restitution =
+		0
+
+	socket.Parent =
+		part0
+
+	return rememberRagdollObject(
+		socket
+	)
+end
+
+-- ==========================================================
+-- COLLISION MEMORY
+-- ==========================================================
+
+local function rememberCollisionStates()
+
+	originalCollision =
+		{}
+
+	for _, object in ipairs(
+		character:GetChildren()
+	) do
+
+		if object:IsA("BasePart") then
+
+			originalCollision[
+				object
+			] =
+				object.CanCollide
+		end
+	end
+end
+
+-- ==========================================================
+-- TORSO-ONLY COLLISIONS
+-- ==========================================================
+
+local function applyFunnyRagdollCollisions()
+
+	for _, object in ipairs(
+		character:GetChildren()
+	) do
+
+		if object:IsA("BasePart") then
+
+			object.CanCollide =
+				false
+		end
+	end
+
+	-- ONLY THE TORSO COLLIDES.
+	torso.CanCollide =
+		true
+
+	root.CanCollide =
+		false
+
+	head.CanCollide =
+		false
+
+	leftArm.CanCollide =
+		false
+
+	rightArm.CanCollide =
+		false
+
+	leftLeg.CanCollide =
+		false
+
+	rightLeg.CanCollide =
+		false
+end
+
+-- ==========================================================
+-- RAGDOLL JOINTS
+-- ==========================================================
+
+local function createRagdollJoints()
+
+	makeBallSocket(
+		neck,
+		"RagdollNeck",
+		60,
+		-75,
+		75
+	)
+
+	makeBallSocket(
+		leftShoulder,
+		"RagdollLeftShoulder",
+		135,
+		-160,
+		160
+	)
+
+	makeBallSocket(
+		rightShoulder,
+		"RagdollRightShoulder",
+		135,
+		-160,
+		160
+	)
+
+	makeBallSocket(
+		leftHip,
+		"RagdollLeftHip",
+		105,
+		-100,
+		100
+	)
+
+	makeBallSocket(
+		rightHip,
+		"RagdollRightHip",
+		105,
+		-100,
+		100
+	)
+end
+
+-- ==========================================================
+-- MOTOR CONTROL
+-- ==========================================================
+
+local function disableMotors()
+
+	if rootJoint then
+		rootJoint.Enabled =
+			false
+	end
+
+	if neck then
+		neck.Enabled =
+			false
+	end
+
+	if leftShoulder then
+		leftShoulder.Enabled =
+			false
+	end
+
+	if rightShoulder then
+		rightShoulder.Enabled =
+			false
+	end
+
+	if leftHip then
+		leftHip.Enabled =
+			false
+	end
+
+	if rightHip then
+		rightHip.Enabled =
+			false
+	end
+end
+
+local function enableMotors()
+
+	if rootJoint then
+		rootJoint.Enabled =
+			true
+	end
+
+	if neck then
+		neck.Enabled =
+			true
+	end
+
+	if leftShoulder then
+		leftShoulder.Enabled =
+			true
+	end
+
+	if rightShoulder then
+		rightShoulder.Enabled =
+			true
+	end
+
+	if leftHip then
+		leftHip.Enabled =
+			true
+	end
+
+	if rightHip then
+		rightHip.Enabled =
+			true
+	end
+end
+
+-- ==========================================================
+-- RAGDOLL
+-- ==========================================================
+
+local function ragdoll(
+	extraVelocity,
+	extraAngularVelocity
+)
+
+	if ragdolled
+		or not running
+	then
+		return
+	end
+
+	ragdolled =
+		true
+
+	doingTrick =
+		false
+
+	rememberCollisionStates()
+
+	createRagdollJoints()
+
+	disableMotors()
+
+	applyFunnyRagdollCollisions()
+
+	humanoid.AutoRotate =
+		false
+
+	humanoid.PlatformStand =
+		true
+
+	humanoid:ChangeState(
+		Enum.HumanoidStateType.Physics
+	)
+
+	-- ======================================================
+	-- ROOT ↔ TORSO LOOSE CONNECTION
+	-- ======================================================
+
+	local rootAttachment =
+		makeAttachment(
+			root,
+			CFrame.new(),
+			"RagdollRootA0"
+		)
+
+	local torsoAttachment =
+		makeAttachment(
+			torso,
+			root.CFrame:
+				ToObjectSpace(
+					torso.CFrame
+				),
+			"RagdollRootA1"
+		)
+
+	local rootSocket =
+		Instance.new(
+			"BallSocketConstraint"
+		)
+
+	rootSocket.Name =
+		"RagdollRootSocket"
+
+	rootSocket.Attachment0 =
+		rootAttachment
+
+	rootSocket.Attachment1 =
+		torsoAttachment
+
+	rootSocket.LimitsEnabled =
+		false
+
+	rootSocket.TwistLimitsEnabled =
+		false
+
+	rootSocket.Parent =
+		root
+
+	rememberRagdollObject(
+		rootSocket
+	)
+
+	-- ======================================================
+	-- PRESERVE STUNT MOMENTUM
+	-- ======================================================
+
+	if extraVelocity then
+
+		torso.AssemblyLinearVelocity =
+			extraVelocity
+	end
+
+	if extraAngularVelocity then
+
+		torso.AssemblyAngularVelocity =
+			extraAngularVelocity
+	end
+end
+
+-- ==========================================================
+-- UNRAGDOLL
+-- ==========================================================
+
+local function unragdoll()
+
+	if not ragdolled then
+		return
+	end
+
+	ragdolled =
+		false
+
+	for _, object in ipairs(
+		createdRagdollObjects
+	) do
+
+		if object
+			and object.Parent
+		then
+
+			pcall(function()
+				object:Destroy()
+			end)
+		end
+	end
+
+	table.clear(
+		createdRagdollObjects
+	)
+
+	enableMotors()
+
+	-- ======================================================
+	-- RESTORE COLLISIONS
+	-- ======================================================
+
+	for part, value in pairs(
+		originalCollision
+	) do
+
+		if part
+			and part.Parent
+		then
+
+			part.CanCollide =
+				value
+		end
+	end
+
+	originalCollision =
+		{}
+
+	root.CanCollide =
+		false
+
+	-- ======================================================
+	-- STOP SPIN
+	-- ======================================================
+
+	root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	torso.AssemblyAngularVelocity =
+		Vector3.zero
+
+	-- ======================================================
+	-- RESTORE HUMANOID
+	-- ======================================================
+
+	humanoid.PlatformStand =
+		false
+
+	humanoid.AutoRotate =
+		true
+
+	local _, yaw, _ =
+		torso.CFrame:
+			ToEulerAnglesYXZ()
+
+	root.CFrame =
+		CFrame.new(
+			torso.Position
+				+ Vector3.new(
+					0,
+					2,
+					0
+				)
+		)
+		* CFrame.Angles(
+			0,
+			yaw,
+			0
+		)
+
+	humanoid:ChangeState(
+		Enum.HumanoidStateType.GettingUp
+	)
+end
+
+-- ==========================================================
+-- TOGGLE RAGDOLL
+-- ==========================================================
+
+local function toggleRagdoll()
+
+	if doingTrick then
+		return
+	end
+
+	if ragdolled then
+
+		unragdoll()
+
+	else
+
+		ragdoll(
+			root.AssemblyLinearVelocity,
+			root.AssemblyAngularVelocity
+		)
+	end
+end
+
+-- ==========================================================
+-- FAIL CHANCE
+-- ==========================================================
+
+local function stuntFails()
+
+	return math.random(
+		1,
+		100
+	) <= config.FailureChance
+end
+
+-- ==========================================================
+-- BEGIN TRICK
+-- ==========================================================
+
+local function beginTrick()
+
+	if doingTrick
+		or ragdolled
+		or not running
+	then
+
+		return false
+	end
+
+	doingTrick =
+		true
+
+	humanoid.AutoRotate =
+		false
+
+	humanoid.PlatformStand =
+		true
+
+	humanoid:ChangeState(
+		Enum.HumanoidStateType.Physics
+	)
+
+	return true
+end
+
+-- ==========================================================
+-- FINISH TRICK
+-- ==========================================================
+
+local function finishTrick()
+
+	if ragdolled
+		or not doingTrick
+		or not running
+	then
+
+		return
+	end
+
+	root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	torso.AssemblyAngularVelocity =
+		Vector3.zero
+
+	humanoid.PlatformStand =
+		false
+
+	humanoid.AutoRotate =
+		true
+
+	humanoid:ChangeState(
+		Enum.HumanoidStateType.GettingUp
+	)
+
+	doingTrick =
+		false
+end
+
+-- ==========================================================
+-- FAIL TRICK
+-- ==========================================================
+
+local function failCurrentTrick()
+
+	if not doingTrick
+		or ragdolled
+		or not running
+	then
+
+		return
+	end
+
+	ragdoll(
+		root.AssemblyLinearVelocity,
+		root.AssemblyAngularVelocity
+	)
+end
+
+-- ==========================================================
+-- FRONTFLIP
+-- ==========================================================
+
+local function frontflip()
+
+	if not beginTrick() then
+		return
+	end
+
+	local look =
+		root.CFrame.LookVector
+
+	root:ApplyImpulse(
+		(
+			look * 16
+
+			+ Vector3.new(
+				0,
+				config.FrontflipPower,
+				0
+			)
+		)
+		* root.AssemblyMass
+	)
+
+	root.AssemblyAngularVelocity =
+		root.CFrame.RightVector
+		* -config.FlipAngularSpeed
+
+	if stuntFails() then
+
+		task.delay(
+			math.random(
+				28,
+				58
+			) / 100,
+
+			failCurrentTrick
+		)
+
+	else
+
+		task.delay(
+			0.9,
+			finishTrick
+		)
+	end
+end
+
+-- ==========================================================
+-- BACKFLIP
+-- ==========================================================
+
+local function backflip()
+
+	if not beginTrick() then
+		return
+	end
+
+	local look =
+		root.CFrame.LookVector
+
+	root:ApplyImpulse(
+		(
+			-look * 8
+
+			+ Vector3.new(
+				0,
+				config.BackflipPower,
+				0
+			)
+		)
+		* root.AssemblyMass
+	)
+
+	root.AssemblyAngularVelocity =
+		root.CFrame.RightVector
+		* config.FlipAngularSpeed
+
+	if stuntFails() then
+
+		task.delay(
+			math.random(
+				28,
+				58
+			) / 100,
+
+			failCurrentTrick
+		)
+
+	else
+
+		task.delay(
+			0.9,
+			finishTrick
+		)
+	end
+end
+
+-- ==========================================================
+-- DIVE
+-- ==========================================================
+
+local function dive()
+
+	if not beginTrick() then
+		return
+	end
+
+	local look =
+		root.CFrame.LookVector
+
+	root:ApplyImpulse(
+		(
+			look
+				* config.DiveForwardPower
+
+			+ Vector3.new(
+				0,
+				config.DiveUpPower,
+				0
+			)
+		)
+		* root.AssemblyMass
+	)
+
+	root.AssemblyAngularVelocity =
+		root.CFrame.RightVector
+		* -4
+
+	if stuntFails() then
+
+		task.delay(
+			0.35,
+			failCurrentTrick
+		)
+
+	else
+
+		task.delay(
+			0.8,
+			finishTrick
+		)
+	end
+end
+
+-- ==========================================================
+-- SPIN JUMP
+-- ==========================================================
+
+local function spinJump()
+
+	if not beginTrick() then
+		return
+	end
+
+	root:ApplyImpulse(
+		Vector3.new(
+			0,
+			config.SpinPower,
+			0
+		)
+		* root.AssemblyMass
+	)
+
+	root.AssemblyAngularVelocity =
+		Vector3.new(
+			0,
+			config.SpinAngularSpeed,
+			0
+		)
+
+	if stuntFails() then
+
+		task.delay(
+			0.45,
+			function()
+
+				if doingTrick
+					and not ragdolled
+					and running
+				then
+
+					root.AssemblyAngularVelocity +=
+						root.CFrame.LookVector
+						* 8
+
+					failCurrentTrick()
+				end
+			end
+		)
+
+	else
+
+		task.delay(
+			0.85,
+			finishTrick
+		)
+	end
+end
+
+-- ==========================================================
+-- ACTION TABLE
+-- ==========================================================
+
+local actions = {
+	Ragdoll = toggleRagdoll,
+	Frontflip = frontflip,
+	Backflip = backflip,
+	Dive = dive,
+	Spin = spinJump
+}
+
+-- ==========================================================
+-- OLD GUI CLEANUP
+-- ==========================================================
+
+local oldGui =
+	playerGui:FindFirstChild(
+		"R6StuntGui"
+	)
+
+if oldGui then
+	oldGui:Destroy()
+end
+
+-- ==========================================================
+-- GUI
+-- ==========================================================
+
+local gui =
+	Instance.new("ScreenGui")
+
+gui.Name =
+	"R6StuntGui"
+
+gui.ResetOnSpawn =
+	false
+
+gui.Parent =
+	playerGui
+
+local frame =
+	Instance.new("Frame")
+
+frame.Size =
+	UDim2.new(
+		0,
+		270,
+		0,
+		430
+	)
+
+frame.Position =
+	UDim2.new(
+		1,
+		-290,
+		0.2,
+		0
+	)
+
+frame.BackgroundColor3 =
+	Color3.fromRGB(
+		24,
+		24,
+		29
+	)
+
+frame.BorderSizePixel =
+	0
+
+frame.Active =
+	true
+
+frame.Draggable =
+	true
+
+frame.Parent =
+	gui
+
+local corner =
+	Instance.new(
+		"UICorner",
+		frame
+	)
+
+corner.CornerRadius =
+	UDim.new(
+		0,
+		9
+	)
+
+-- ==========================================================
+-- TITLE
+-- ==========================================================
+
+local title =
+	Instance.new("TextLabel")
+
+title.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		38
+	)
+
+title.BackgroundColor3 =
+	Color3.fromRGB(
+		35,
+		35,
+		42
+	)
+
+title.BorderSizePixel =
+	0
+
+title.Text =
+	"R6 STUNT / RAGDOLL LAB"
+
+title.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+title.Font =
+	Enum.Font.SourceSansBold
+
+title.TextSize =
+	15
+
+title.Parent =
+	frame
+
+-- ==========================================================
+-- DESCRIPTION
+-- ==========================================================
+
+local info =
+	Instance.new("TextLabel")
+
+info.Size =
+	UDim2.new(
+		1,
+		-16,
+		0,
+		42
+	)
+
+info.Position =
+	UDim2.new(
+		0,
+		8,
+		0,
+		42
+	)
+
+info.BackgroundTransparency =
+	1
+
+info.Text =
+	"Torso-only collision ragdoll 😭\n"
+	.. "Click a bind, then press a new key."
+
+info.TextWrapped =
+	true
+
+info.TextColor3 =
+	Color3.fromRGB(
+		180,
+		180,
+		190
+	)
+
+info.Font =
+	Enum.Font.SourceSans
+
+info.TextSize =
+	12
+
+info.Parent =
+	frame
+
+-- ==========================================================
+-- FAILURE LABEL
+-- ==========================================================
+
+local failureLabel =
+	Instance.new("TextLabel")
+
+failureLabel.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		24
+	)
+
+failureLabel.Position =
+	UDim2.new(
+		0,
+		10,
+		0,
+		85
+	)
+
+failureLabel.BackgroundTransparency =
+	1
+
+failureLabel.TextColor3 =
+	Color3.fromRGB(
+		255,
+		195,
+		90
+	)
+
+failureLabel.Font =
+	Enum.Font.SourceSansBold
+
+failureLabel.TextSize =
+	13
+
+failureLabel.Parent =
+	frame
+
+local function updateFailureText()
+
+	failureLabel.Text =
+		"Stunt Failure Chance: "
+		.. tostring(
+			config.FailureChance
+		)
+		.. "%"
+end
+
+updateFailureText()
+
+-- ==========================================================
+-- FAILURE BUTTONS
+-- ==========================================================
+
+local failMinus =
+	Instance.new("TextButton")
+
+failMinus.Size =
+	UDim2.new(
+		0,
+		55,
+		0,
+		30
+	)
+
+failMinus.Position =
+	UDim2.new(
+		0,
+		10,
+		0,
+		112
+	)
+
+failMinus.BackgroundColor3 =
+	Color3.fromRGB(
+		65,
+		65,
+		72
+	)
+
+failMinus.BorderSizePixel =
+	0
+
+failMinus.Text =
+	"-10%"
+
+failMinus.TextColor3 =
+	Color3.new(
+		1,
+		1,
+		1
+	)
+
+failMinus.Font =
+	Enum.Font.SourceSansBold
+
+failMinus.TextSize =
+	13
+
+failMinus.Parent =
+	frame
+
+local failPlus =
+	Instance.new("TextButton")
+
+failPlus.Size =
+	UDim2.new(
+		0,
+		55,
+		0,
+		30
+	)
+
+failPlus.Position =
+	UDim2.new(
+		1,
+		-65,
+		0,
+		112
+	)
+
+failPlus.BackgroundColor3 =
+	Color3.fromRGB(
+		65,
+		65,
+		72
+	)
+
+failPlus.BorderSizePixel =
+	0
+
+failPlus.Text =
+	"+10%"
+
+failPlus.TextColor3 =
+	Color3.new(
+		1,
+		1,
+		1
+	)
+
+failPlus.Font =
+	Enum.Font.SourceSansBold
+
+failPlus.TextSize =
+	13
+
+failPlus.Parent =
+	frame
+
+failMinus.MouseButton1Click:
+	Connect(function()
+
+		config.FailureChance =
+			math.clamp(
+				config.FailureChance - 10,
+				0,
+				100
+			)
+
+		updateFailureText()
+	end)
+
+failPlus.MouseButton1Click:
+	Connect(function()
+
+		config.FailureChance =
+			math.clamp(
+				config.FailureChance + 10,
+				0,
+				100
+			)
+
+		updateFailureText()
+	end)
+
+-- ==========================================================
+-- BIND BUTTON CREATOR
+-- ==========================================================
+
+local refreshFunctions = {}
+
+local function createBindButton(
+	actionName,
+	y
+)
+
+	local button =
+		Instance.new(
+			"TextButton"
+		)
+
+	button.Size =
+		UDim2.new(
+			1,
+			-20,
+			0,
+			36
+		)
+
+	button.Position =
+		UDim2.new(
+			0,
+			10,
+			0,
+			y
+		)
+
+	button.BackgroundColor3 =
+		Color3.fromRGB(
+			48,
+			48,
+			56
+		)
+
+	button.BorderSizePixel =
+		0
+
+	button.TextColor3 =
+		Color3.fromRGB(
+			235,
+			235,
+			235
+		)
+
+	button.Font =
+		Enum.Font.SourceSansBold
+
+	button.TextSize =
+		13
+
+	button.Parent =
+		frame
+
+	local buttonCorner =
+		Instance.new(
+			"UICorner",
+			button
+		)
+
+	buttonCorner.CornerRadius =
+		UDim.new(
+			0,
+			5
+		)
+
+	bindButtons[actionName] =
+		button
+
+	local function refresh()
+
+		button.Text =
+			actionName
+			.. ": ["
+			.. binds[
+				actionName
+			].Name
+			.. "]"
+	end
+
+	refresh()
+
+	refreshFunctions[
+		actionName
+	] =
+		refresh
+
+	button.MouseButton1Click:
+		Connect(function()
+
+			awaitingBind =
+				actionName
+
+			button.Text =
+				actionName
+				.. ": PRESS A KEY..."
+
+			button.BackgroundColor3 =
+				Color3.fromRGB(
+					0,
+					120,
+					190
+				)
+		end)
+end
+
+-- ==========================================================
+-- BIND BUTTONS
+-- ==========================================================
+
+createBindButton(
+	"Ragdoll",
+	150
+)
+
+createBindButton(
+	"Frontflip",
+	190
+)
+
+createBindButton(
+	"Backflip",
+	230
+)
+
+createBindButton(
+	"Dive",
+	270
+)
+
+createBindButton(
+	"Spin",
+	310
+)
+
+-- ==========================================================
+-- KILL SCRIPT
+-- ==========================================================
+
+local killButton =
+	Instance.new("TextButton")
+
+killButton.Size =
+	UDim2.new(
+		1,
+		-20,
+		0,
+		42
+	)
+
+killButton.Position =
+	UDim2.new(
+		0,
+		10,
+		1,
+		-52
+	)
+
+killButton.BackgroundColor3 =
+	Color3.fromRGB(
+		175,
+		38,
+		38
+	)
+
+killButton.BorderSizePixel =
+	0
+
+killButton.Text =
+	"KILL SCRIPT"
+
+killButton.TextColor3 =
+	Color3.fromRGB(
+		255,
+		255,
+		255
+	)
+
+killButton.Font =
+	Enum.Font.SourceSansBold
+
+killButton.TextSize =
+	14
+
+killButton.Parent =
+	frame
+
+-- ==========================================================
+-- KEY INPUT
+-- ==========================================================
+
+trackConnection(
+	UserInputService.InputBegan:
+		Connect(function(
+			input,
+			gameProcessed
+		)
+
+			if not running
+				or gameProcessed
+			then
+				return
+			end
+
+			if input.UserInputType
+				~= Enum.UserInputType.Keyboard
+			then
+				return
+			end
+
+			-- ==============================================
+			-- REBIND
+			-- ==============================================
+
+			if awaitingBind then
+
+				local action =
+					awaitingBind
+
+				binds[action] =
+					input.KeyCode
+
+				awaitingBind =
+					nil
+
+				if bindButtons[action] then
+
+					bindButtons[action].
+						BackgroundColor3 =
+						Color3.fromRGB(
+							48,
+							48,
+							56
+						)
+				end
+
+				if refreshFunctions[action] then
+					refreshFunctions[action]()
+				end
+
+				return
+			end
+
+			-- ==============================================
+			-- ACTIONS
+			-- ==============================================
+
+			for actionName,
+				keyCode in pairs(
+					binds
+				)
+			do
+
+				if input.KeyCode
+					== keyCode
+				then
+
+					local action =
+						actions[
+							actionName
+						]
+
+					if action then
+						action()
+					end
+
+					return
+				end
+			end
+		end)
+)
+
+-- ==========================================================
+-- CLEANUP / KILL SCRIPT
+-- ==========================================================
+
+local function cleanup()
+
+	if not running then
+		return
+	end
+
+	running =
+		false
+
+	awaitingBind =
+		nil
+
+	doingTrick =
+		false
+
+	ragdolled =
+		false
+
+	-- Remove constraints.
+	for _, object in ipairs(
+		createdRagdollObjects
+	) do
+
+		if object
+			and object.Parent
+		then
+
+			pcall(function()
+				object:Destroy()
+			end)
+		end
+	end
+
+	table.clear(
+		createdRagdollObjects
+	)
+
+	-- Restore motors.
+	enableMotors()
+
+	-- Restore collisions.
+	for part, value in pairs(
+		originalCollision
+	) do
+
+		if part
+			and part.Parent
+		then
+
+			part.CanCollide =
+				value
+		end
+	end
+
+	originalCollision =
+		{}
+
+	root.CanCollide =
+		false
+
+	-- Stop physics.
+	root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	torso.AssemblyAngularVelocity =
+		Vector3.zero
+
+	-- Restore Humanoid.
+	humanoid.PlatformStand =
+		false
+
+	humanoid.AutoRotate =
+		true
+
+	pcall(function()
+
+		humanoid:ChangeState(
+			Enum.HumanoidStateType.GettingUp
+		)
+
+	end)
+
+	-- Disconnect events.
+	for _, connection in ipairs(
+		connections
+	) do
+
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+
+	table.clear(
+		connections
+	)
+
+	if gui then
+		gui:Destroy()
+	end
+
+	_G.R6StuntCleanup =
+		nil
+
+	print(
+		"R6 Stunt Lab killed."
+	)
+end
+
+_G.R6StuntCleanup =
+	cleanup
+
+killButton.MouseButton1Click:
+	Connect(
+		cleanup
+	)
+
+-- ==========================================================
+-- START
+-- ==========================================================
+
+print("======================================")
+print("R6 STUNT / RAGDOLL LAB")
+print("TORSO-ONLY COLLISION MODE")
+print("R = Ragdoll")
+print("F = Frontflip")
+print("G = Backflip")
+print("T = Dive")
+print("Y = Spin")
+print("======================================")
